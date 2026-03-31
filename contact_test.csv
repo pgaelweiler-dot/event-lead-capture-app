@@ -1,0 +1,17 @@
+id;firstname;lastname;email;company;title;bounce
+1001;Max;Mustermann;max.mustermann@siemens.com;Siemens;Manager;false
+1002;Anna;Schmidt;anna.schmidt@4flow.com;4flow;Consultant;true
+1003;Peter;Meyer;peter.meyer@bosch.com;Bosch;Engineer;false
+1004;Julia;Fischer;julia.fischer@bmw.de;BMW;Project Manager;true
+1005;Lukas;Wagner;lukas.wagner@deloitte.com;Deloitte;Senior Consultant;false
+1006;Sophie;Klein;sophie.klein@accenture.com;Accenture;Analyst;true
+1007;Daniel;Hoffmann;daniel.hoffmann@amazon.com;Amazon;Operations Manager;false
+1008;Laura;Becker;laura.becker@google.com;Google;Product Manager;true
+1009;Jonas;Schulz;jonas.schulz@spotify.com;Spotify;Marketing Manager;false
+1010;Nina;Koch;nina.koch@zalando.de;Zalando;Category Manager;true
+1011;Tim;Richter;tim.richter@siemens.com;Siemens;Engineer;false
+1012;Lea;Neumann;lea.neumann@4flow.com;4flow;Consultant;true
+1013;Felix;Schwarz;felix.schwarz@bosch.com;Bosch;Technician;false
+1014;Maria;Krüger;maria.krueger@bmw.de;BMW;HR Manager;true
+1015;Paul;Hartmann;paul.hartmann@deloitte.com;Deloitte;Consultant;false
+1016;Patrick;Gälweiler;4flow;4flow;Softie;false

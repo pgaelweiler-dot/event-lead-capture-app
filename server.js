@@ -190,12 +190,83 @@ app.post("/sync/lead", async (req, res) => {
 
     const data = await createRes.json();
 
-    if (!createRes.ok) {
-      return res.status(createRes.status).json({
-        error: "Create failed",
-        details: data
+if (!createRes.ok) {
+  console.log("⚠️ Create failed, analyzing error...");
+
+  const message = data?.message || "";
+
+  // 🔁 HANDLE DUPLICATE → fallback to update
+  if (message.includes("already has that value")) {
+    console.log("🔁 Detected duplicate → fallback to search+update");
+
+    // search again
+    const retrySearch = await fetch(
+      "https://api.hubapi.com/crm/v3/objects/contacts/search",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.Private_App_Token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          filterGroups: [
+            {
+              filters: [
+                {
+                  propertyName: "email",
+                  operator: "EQ",
+                  value: email
+                }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const retryData = await retrySearch.json();
+
+    if (retryData.total > 0) {
+      const contactId = retryData.results[0].id;
+
+      console.log("🟢 Retry update after conflict:", contactId);
+
+      const updateRes = await fetch(
+        `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${process.env.Private_App_Token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            properties: {
+              firstname: c.firstName,
+              lastname: c.lastName,
+              email,
+              company: c.company,
+              jobtitle: c.jobTitle,
+              phone: c.phoneNumber
+            }
+          })
+        }
+      );
+
+      const updateData = await updateRes.json();
+
+      return res.json({
+        success: true,
+        mode: "retry_update_after_conflict",
+        data: updateData
       });
     }
+  }
+
+  return res.status(createRes.status).json({
+    error: "Create failed",
+    details: data
+  });
+}
 
     return res.json({
       success: true,

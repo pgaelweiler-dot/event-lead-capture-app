@@ -16,12 +16,49 @@ app.use(cors({
 
 app.use(express.json());
 
-// ✅ Health check
+// =========================
+// HEALTH CHECK
+// =========================
 app.get("/", (req, res) => {
   res.send("Lead Sync API running");
 });
 
-// ✅ Main sync endpoint
+// =========================
+// CONTACT PRELOAD (WITH BOUNCE)
+// =========================
+app.get("/contacts/preload", async (req, res) => {
+  try {
+    const response = await fetch(
+      "https://api.hubapi.com/crm/v3/objects/contacts?limit=100&properties=firstname,lastname,email,company,jobtitle,hs_email_hard_bounce_reason",
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.Private_App_Token}`
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    const contacts = data.results.map(c => ({
+      id: c.id,
+      first: c.properties.firstname,
+      last: c.properties.lastname,
+      email: c.properties.email,
+      company: c.properties.company,
+      title: c.properties.jobtitle,
+      bounce: c.properties.hs_email_hard_bounce_reason ? "known" : "unknown"
+    }));
+
+    res.json({ contacts });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =========================
+// MAIN SYNC ENDPOINT
+// =========================
 app.post("/sync/lead", async (req, res) => {
   const payload = req.body;
 
@@ -37,7 +74,7 @@ app.post("/sync/lead", async (req, res) => {
     console.log("🔵 Incoming contact:", c);
 
     // =========================
-    // 1️⃣ UPDATE BY HUBSPOT ID
+    // 1️⃣ UPDATE BY ID
     // =========================
     if (c.hubspotId) {
       console.log("🟢 Updating via ID:", c.hubspotId);
@@ -72,11 +109,7 @@ app.post("/sync/lead", async (req, res) => {
         });
       }
 
-      return res.json({
-        success: true,
-        mode: "update_by_id",
-        data
-      });
+      return res.json({ success: true, mode: "update_by_id", data });
     }
 
     // =========================
@@ -90,7 +123,6 @@ app.post("/sync/lead", async (req, res) => {
 
     console.log("🟡 Falling back to email:", email);
 
-    // 🔍 SEARCH CONTACT
     const searchRes = await fetch(
       "https://api.hubapi.com/crm/v3/objects/contacts/search",
       {
@@ -148,13 +180,6 @@ app.post("/sync/lead", async (req, res) => {
 
       const data = await updateRes.json();
 
-      if (!updateRes.ok) {
-        return res.status(updateRes.status).json({
-          error: "Update via email failed",
-          details: data
-        });
-      }
-
       return res.json({
         success: true,
         mode: "update_by_email",
@@ -163,7 +188,7 @@ app.post("/sync/lead", async (req, res) => {
     }
 
     // =========================
-    // 2b️⃣ NOT FOUND → CREATE
+    // 2b️⃣ CREATE
     // =========================
     console.log("🔵 Creating new contact");
 
@@ -190,83 +215,78 @@ app.post("/sync/lead", async (req, res) => {
 
     const data = await createRes.json();
 
-if (!createRes.ok) {
-  console.log("⚠️ Create failed, analyzing error...");
+    // 🔁 HANDLE DUPLICATE CONFLICT
+    if (!createRes.ok) {
+      const message = data?.message || "";
 
-  const message = data?.message || "";
+      if (message.includes("already has that value")) {
+        console.log("🔁 Duplicate detected → retry update");
 
-  // 🔁 HANDLE DUPLICATE → fallback to update
-  if (message.includes("already has that value")) {
-    console.log("🔁 Detected duplicate → fallback to search+update");
-
-    // search again
-    const retrySearch = await fetch(
-      "https://api.hubapi.com/crm/v3/objects/contacts/search",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.Private_App_Token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          filterGroups: [
-            {
-              filters: [
+        const retrySearch = await fetch(
+          "https://api.hubapi.com/crm/v3/objects/contacts/search",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.Private_App_Token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              filterGroups: [
                 {
-                  propertyName: "email",
-                  operator: "EQ",
-                  value: email
+                  filters: [
+                    {
+                      propertyName: "email",
+                      operator: "EQ",
+                      value: email
+                    }
+                  ]
                 }
               ]
+            })
+          }
+        );
+
+        const retryData = await retrySearch.json();
+
+        if (retryData.total > 0) {
+          const contactId = retryData.results[0].id;
+
+          const updateRes = await fetch(
+            `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
+            {
+              method: "PATCH",
+              headers: {
+                Authorization: `Bearer ${process.env.Private_App_Token}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                properties: {
+                  firstname: c.firstName,
+                  lastname: c.lastName,
+                  email,
+                  company: c.company,
+                  jobtitle: c.jobTitle,
+                  phone: c.phoneNumber
+                }
+              })
             }
-          ]
-        })
-      }
-    );
+          );
 
-    const retryData = await retrySearch.json();
+          const updateData = await updateRes.json();
 
-    if (retryData.total > 0) {
-      const contactId = retryData.results[0].id;
-
-      console.log("🟢 Retry update after conflict:", contactId);
-
-      const updateRes = await fetch(
-        `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${process.env.Private_App_Token}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            properties: {
-              firstname: c.firstName,
-              lastname: c.lastName,
-              email,
-              company: c.company,
-              jobtitle: c.jobTitle,
-              phone: c.phoneNumber
-            }
-          })
+          return res.json({
+            success: true,
+            mode: "retry_update_after_conflict",
+            data: updateData
+          });
         }
-      );
+      }
 
-      const updateData = await updateRes.json();
-
-      return res.json({
-        success: true,
-        mode: "retry_update_after_conflict",
-        data: updateData
+      return res.status(createRes.status).json({
+        error: "Create failed",
+        details: data
       });
     }
-  }
-
-  return res.status(createRes.status).json({
-    error: "Create failed",
-    details: data
-  });
-}
 
     return res.json({
       success: true,
@@ -284,7 +304,9 @@ if (!createRes.ok) {
   }
 });
 
-// ✅ Scalingo port
+// =========================
+// START SERVER
+// =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {

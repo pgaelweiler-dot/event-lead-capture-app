@@ -7,7 +7,7 @@ dotenv.config();
 
 const app = express();
 
-// ✅ CORS (allows your frontend to call this API)
+// ✅ CORS
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST"],
@@ -28,15 +28,146 @@ app.post("/sync/lead", async (req, res) => {
   try {
     const c = payload.extracted;
 
-    // 🔒 Basic validation
-    if (!c || !c.email) {
-      return res.status(400).json({
-        error: "Email is required"
+    if (!c) {
+      return res.status(400).json({ error: "Missing contact data" });
+    }
+
+    const email = c.email?.trim();
+
+    console.log("🔵 Incoming contact:", c);
+
+    // =========================
+    // 1️⃣ UPDATE BY HUBSPOT ID
+    // =========================
+    if (c.hubspotId) {
+      console.log("🟢 Updating via ID:", c.hubspotId);
+
+      const updateRes = await fetch(
+        `https://api.hubapi.com/crm/v3/objects/contacts/${c.hubspotId}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${process.env.Private_App_Token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            properties: {
+              firstname: c.firstName,
+              lastname: c.lastName,
+              email,
+              company: c.company,
+              jobtitle: c.jobTitle,
+              phone: c.phoneNumber
+            }
+          })
+        }
+      );
+
+      const data = await updateRes.json();
+
+      if (!updateRes.ok) {
+        return res.status(updateRes.status).json({
+          error: "Update by ID failed",
+          details: data
+        });
+      }
+
+      return res.json({
+        success: true,
+        mode: "update_by_id",
+        data
       });
     }
 
-    // 🔗 Send to HubSpot
-    const response = await fetch(
+    // =========================
+    // 2️⃣ EMAIL FALLBACK
+    // =========================
+    if (!email) {
+      return res.status(400).json({
+        error: "No email and no hubspotId"
+      });
+    }
+
+    console.log("🟡 Falling back to email:", email);
+
+    // 🔍 SEARCH CONTACT
+    const searchRes = await fetch(
+      "https://api.hubapi.com/crm/v3/objects/contacts/search",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.Private_App_Token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          filterGroups: [
+            {
+              filters: [
+                {
+                  propertyName: "email",
+                  operator: "EQ",
+                  value: email
+                }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const searchData = await searchRes.json();
+
+    // =========================
+    // 2a️⃣ FOUND → UPDATE
+    // =========================
+    if (searchData.total > 0) {
+      const contactId = searchData.results[0].id;
+
+      console.log("🟢 Updating via email match:", contactId);
+
+      const updateRes = await fetch(
+        `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${process.env.Private_App_Token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            properties: {
+              firstname: c.firstName,
+              lastname: c.lastName,
+              email,
+              company: c.company,
+              jobtitle: c.jobTitle,
+              phone: c.phoneNumber
+            }
+          })
+        }
+      );
+
+      const data = await updateRes.json();
+
+      if (!updateRes.ok) {
+        return res.status(updateRes.status).json({
+          error: "Update via email failed",
+          details: data
+        });
+      }
+
+      return res.json({
+        success: true,
+        mode: "update_by_email",
+        data
+      });
+    }
+
+    // =========================
+    // 2b️⃣ NOT FOUND → CREATE
+    // =========================
+    console.log("🔵 Creating new contact");
+
+    const createRes = await fetch(
       "https://api.hubapi.com/crm/v3/objects/contacts",
       {
         method: "POST",
@@ -48,7 +179,7 @@ app.post("/sync/lead", async (req, res) => {
           properties: {
             firstname: c.firstName,
             lastname: c.lastName,
-            email: c.email,
+            email,
             company: c.company,
             jobtitle: c.jobTitle,
             phone: c.phoneNumber
@@ -57,23 +188,24 @@ app.post("/sync/lead", async (req, res) => {
       }
     );
 
-    const data = await response.json();
+    const data = await createRes.json();
 
-    // ❌ HubSpot error handling
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: "HubSpot error",
+    if (!createRes.ok) {
+      return res.status(createRes.status).json({
+        error: "Create failed",
         details: data
       });
     }
 
-    // ✅ Success
-    res.json({
+    return res.json({
       success: true,
+      mode: "create",
       data
     });
 
   } catch (err) {
+    console.error("🔴 Server error:", err);
+
     res.status(500).json({
       error: "Server error",
       message: err.message
@@ -81,7 +213,7 @@ app.post("/sync/lead", async (req, res) => {
   }
 });
 
-// ✅ Scalingo-compatible port
+// ✅ Scalingo port
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {

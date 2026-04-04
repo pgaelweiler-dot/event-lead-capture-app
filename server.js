@@ -85,22 +85,7 @@ async function fetchContactsByIds(ids) {
       },
       body: JSON.stringify({
         properties: PROPERTIES,
-        associations: ["companies"], // 👈 NEW
-        inputs: ids.map(id => ({ id }))
-      })
-    }
-  );
-
-  return response.json();
-}/batch/read`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.Private_App_Token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        properties: PROPERTIES,
+        associations: ["companies"],
         inputs: ids.map(id => ({ id }))
       })
     }
@@ -112,10 +97,9 @@ async function fetchContactsByIds(ids) {
 function mapContact(c) {
   const p = c.properties;
 
-  // 👇 try to get primary associated company
   let associatedCompanyId = null;
 
-  if (c.associations?.companies?.results?.length > 0) {
+  if (c.associations && c.associations.companies && c.associations.companies.results.length > 0) {
     associatedCompanyId = c.associations.companies.results[0].id;
   }
 
@@ -125,14 +109,13 @@ function mapContact(c) {
     last: p.lastname || "",
     email: p.email || "",
 
-    // 👇 prefer associated company, fallback to text field
+    // still ID here (resolved later in sync step)
     company: associatedCompanyId || p.company || "",
 
     title: p.jobtitle || "",
     phone: p.phone || "",
     bounceReason: p.hs_email_hard_bounce_reason || null
   };
-};
 }
 
 // =========================
@@ -207,7 +190,7 @@ async function syncContacts() {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            properties: ["name", "n4f_email_patterns"]
+            properties: ["name", "n4f_email_patterns"],
             inputs: ids.map(id => ({ id }))
           })
         }
@@ -237,22 +220,21 @@ async function syncContacts() {
       const p = c.properties;
       const companyId = c.associations?.companies?.results?.[0]?.id;
 
-      return {
-        id: c.id,
-        first: p.firstname || "",
-        last: p.lastname || "",
-        email: p.email || "",
+      const companyData = companyMap[companyId] || {};
 
-        // ✅ now real company name
-        const companyData = companyMap[companyId] || {};
-
-        company: companyData.name || p.company || "",
-        companyPatterns: companyData.patterns || []
-
-        title: p.jobtitle || "",
-        phone: p.phone || "",
-        bounceReason: p.hs_email_hard_bounce_reason || null
-      };
+    return {
+      id: c.id,
+      first: p.firstname || "",
+      last: p.lastname || "",
+      email: p.email || "",
+    
+      company: companyData.name || p.company || "",
+      companyPatterns: companyData.patterns || [],
+    
+      title: p.jobtitle || "",
+      phone: p.phone || "",
+      bounceReason: p.hs_email_hard_bounce_reason || null
+    };
     });
 
     contactsCache = allContacts;
@@ -266,10 +248,6 @@ async function syncContacts() {
     isSyncing = false;
   }
 }
-
-  try {
-    isSyncing = true;
-    console.log("🔄 Starting HubSpot contact sync (MULTI-LIST)...");
 
     const allIdsSet = new Set();
 

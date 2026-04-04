@@ -29,9 +29,9 @@ const PROPERTIES = [
   "firstname",
   "lastname",
   "email",
-  "company",
   "jobtitle",
   "phone",
+  "company", // fallback
   "hs_email_hard_bounce_reason"
 ];
 
@@ -85,6 +85,22 @@ async function fetchContactsByIds(ids) {
       },
       body: JSON.stringify({
         properties: PROPERTIES,
+        associations: ["companies"], // 👈 NEW
+        inputs: ids.map(id => ({ id }))
+      })
+    }
+  );
+
+  return response.json();
+}/batch/read`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.Private_App_Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        properties: PROPERTIES,
         inputs: ids.map(id => ({ id }))
       })
     }
@@ -96,16 +112,27 @@ async function fetchContactsByIds(ids) {
 function mapContact(c) {
   const p = c.properties;
 
+  // 👇 try to get primary associated company
+  let associatedCompanyId = null;
+
+  if (c.associations?.companies?.results?.length > 0) {
+    associatedCompanyId = c.associations.companies.results[0].id;
+  }
+
   return {
     id: c.id,
     first: p.firstname || "",
     last: p.lastname || "",
     email: p.email || "",
-    company: p.company || "",
+
+    // 👇 prefer associated company, fallback to text field
+    company: associatedCompanyId || p.company || "",
+
     title: p.jobtitle || "",
     phone: p.phone || "",
     bounceReason: p.hs_email_hard_bounce_reason || null
   };
+};
 }
 
 // =========================
@@ -116,6 +143,121 @@ async function syncContacts() {
     console.log("Sync already running, skipping...");
     return;
   }
+
+  try {
+    isSyncing = true;
+    console.log("🔄 Starting HubSpot contact sync (MULTI-LIST + COMPANY)...");
+
+    const allIdsSet = new Set();
+
+    // 1) Collect contact IDs from all lists
+    for (const listId of HUBSPOT_LIST_IDS) {
+      console.log(`Processing list ${listId}...`);
+
+      let after = null;
+      let page = 1;
+
+      do {
+        const listData = await fetchListMembers(listId, after);
+
+        (listData.results || []).forEach(r => {
+          if (r.recordId) allIdsSet.add(r.recordId);
+        });
+
+        after = listData.paging?.next?.after || null;
+        page++;
+
+      } while (after);
+    }
+
+    const allIds = Array.from(allIdsSet);
+    console.log(`Total unique contact IDs: ${allIds.length}`);
+
+    // 2) Fetch contacts (with associations)
+    const chunkSize = 100;
+    let rawContacts = [];
+    const companyIdsSet = new Set();
+
+    for (let i = 0; i < allIds.length; i += chunkSize) {
+      const chunk = allIds.slice(i, i + chunkSize);
+
+      const contactsData = await fetchContactsByIds(chunk);
+
+      (contactsData.results || []).forEach(c => {
+        rawContacts.push(c);
+
+        const companyId = c.associations?.companies?.results?.[0]?.id;
+        if (companyId) companyIdsSet.add(companyId);
+      });
+    }
+
+    console.log(`Collected ${companyIdsSet.size} company IDs`);
+
+    // 3) Fetch companies
+    const companyIds = Array.from(companyIdsSet);
+    const companyMap = {};
+
+    async function fetchCompaniesByIds(ids) {
+      const res = await fetch(
+        "https://api.hubapi.com/crm/v3/objects/companies/batch/read",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.Private_App_Token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            properties: ["name"],
+            inputs: ids.map(id => ({ id }))
+          })
+        }
+      );
+
+      return res.json();
+    }
+
+    for (let i = 0; i < companyIds.length; i += chunkSize) {
+      const chunk = companyIds.slice(i, i + chunkSize);
+      const companiesData = await fetchCompaniesByIds(chunk);
+
+      (companiesData.results || []).forEach(c => {
+        companyMap[c.id] = c.properties.name;
+      });
+    }
+
+    console.log(`Resolved ${Object.keys(companyMap).length} companies`);
+
+    // 4) Final mapping
+    const allContacts = rawContacts.map(c => {
+      const p = c.properties;
+      const companyId = c.associations?.companies?.results?.[0]?.id;
+
+      return {
+        id: c.id,
+        first: p.firstname || "",
+        last: p.lastname || "",
+        email: p.email || "",
+
+        // ✅ now real company name
+        company: companyMap[companyId] || p.company || "",
+
+        title: p.jobtitle || "",
+        phone: p.phone || "",
+        bounceReason: p.hs_email_hard_bounce_reason || null
+      };
+    });
+
+    contactsCache = allContacts;
+    lastSync = new Date();
+
+    console.log(`✅ Sync complete (with companies): ${contactsCache.length} contacts`);
+
+  } catch (err) {
+    console.error("🔴 Sync error:", err.message);
+  } finally {
+    isSyncing = false;
+  }
+}
 
   try {
     isSyncing = true;

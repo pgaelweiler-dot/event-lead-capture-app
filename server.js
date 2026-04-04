@@ -221,7 +221,12 @@ async function syncContacts() {
       const companiesData = await fetchCompaniesByIds(chunk);
 
       (companiesData.results || []).forEach(c => {
-        companyMap[c.id] = c.properties.name;
+        companyMap[c.id] = {
+        name: c.properties.name,
+        patterns: c.properties.n4f_email_patterns
+          ? JSON.parse(c.properties.n4f_email_patterns)
+          : []
+      };
       });
     }
 
@@ -239,7 +244,10 @@ async function syncContacts() {
         email: p.email || "",
 
         // ✅ now real company name
-        company: companyMap[companyId] || p.company || "",
+        const companyData = companyMap[companyId] || {};
+
+        company: companyData.name || p.company || "",
+        companyPatterns: companyData.patterns || []
 
         title: p.jobtitle || "",
         phone: p.phone || "",

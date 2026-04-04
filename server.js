@@ -17,8 +17,7 @@ let isSyncing = false;
 // =========================
 // CONFIG
 // =========================
-const HUBSPOT_URL = "https://api.hubapi.com/crm/v3/objects/contacts
-";
+const HUBSPOT_URL = "https://api.hubapi.com/crm/v3/objects/contacts";
 
 const HUBSPOT_LIST_IDS = (process.env.HUBSPOT_LIST_IDS || "19611")
 .split(",")

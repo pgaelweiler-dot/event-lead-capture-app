@@ -155,6 +155,7 @@ async function syncContacts() {
       const data = await fetchContactsByIds(chunk);
 
       (data.results || []).forEach(c => {
+        console.log("Contact associations:", c.associations);
         rawContacts.push(c);
 
         const companyId = c.associations?.companies?.results?.[0]?.id;

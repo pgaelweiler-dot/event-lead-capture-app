@@ -207,7 +207,7 @@ async function syncContacts() {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            properties: ["name"],
+            properties: ["name", "n4f_email_patterns"]
             inputs: ids.map(id => ({ id }))
           })
         }

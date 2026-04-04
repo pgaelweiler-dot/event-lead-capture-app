@@ -162,23 +162,41 @@ async function syncContacts() {
       });
     }
 
-    // 3. FETCH COMPANIES
-    const companyMap = {};
-    const companyIds = Array.from(companyIdsSet);
+   // 3. FETCH COMPANIES
+const companyMap = {};
+const companyIds = Array.from(companyIdsSet);
 
-    for (let i = 0; i < companyIds.length; i += chunkSize) {
-      const chunk = companyIds.slice(i, i + chunkSize);
-      const data = await fetchCompaniesByIds(chunk);
+for (let i = 0; i < companyIds.length; i += chunkSize) {
+  const chunk = companyIds.slice(i, i + chunkSize);
+  const data = await fetchCompaniesByIds(chunk);
 
-      (data.results || []).forEach(c => {
-        companyMap[c.id] = {
-          name: c.properties.name,
-          patterns: c.properties.n4f_email_patterns
-            ? JSON.parse(c.properties.n4f_email_patterns)
-            : []
-        };
-      });
+  (data.results || []).forEach(c => {
+    // 🔍 DEBUG LOGS (ADD THESE)
+    console.log("---- COMPANY DEBUG ----");
+    console.log("Company ID:", c.id);
+    console.log("Company name:", c.properties.name);
+    console.log("RAW pattern field:", c.properties.n4f_email_patterns);
+
+    let parsedPatterns = [];
+
+    try {
+      if (c.properties.n4f_email_patterns) {
+        parsedPatterns = JSON.parse(c.properties.n4f_email_patterns);
+      }
+    } catch (err) {
+      console.error("❌ JSON PARSE ERROR:", err.message);
+      console.log("Problematic value:", c.properties.n4f_email_patterns);
     }
+
+    console.log("Parsed patterns:", parsedPatterns);
+
+    // ✅ FINAL OBJECT
+    companyMap[c.id] = {
+      name: c.properties.name,
+      patterns: parsedPatterns
+    };
+  });
+}
 
     // 4. MAP FINAL CONTACTS
     const allContacts = rawContacts.map(c => {

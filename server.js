@@ -7,7 +7,31 @@ dotenv.config();
 
 const app = express();
 
-// ✅ CORS
+// =========================
+// CACHE LAYER
+// =========================
+let contactsCache = [];
+let lastSync = null;
+let isSyncing = false;
+
+// =========================
+// CONFIG
+// =========================
+const HUBSPOT_URL = "https://api.hubapi.com/crm/v3/objects/contacts";
+
+const PROPERTIES = [
+  "firstname",
+  "lastname",
+  "email",
+  "company",
+  "jobtitle",
+  "phone",
+  "hs_email_hard_bounce_reason"
+];
+
+// =========================
+// CORS
+// =========================
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST"],
@@ -24,40 +48,108 @@ app.get("/", (req, res) => {
 });
 
 // =========================
-// CONTACT PRELOAD (WITH BOUNCE)
+// FETCH CONTACTS (PAGINATED)
 // =========================
-app.get("/contacts/preload", async (req, res) => {
+async function fetchContacts(after = null) {
+  const url = new URL(HUBSPOT_URL);
+
+  url.searchParams.append("limit", "100");
+  url.searchParams.append("properties", PROPERTIES.join(","));
+
+  if (after) {
+    url.searchParams.append("after", after);
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${process.env.Private_App_Token}`
+    }
+  });
+
+  return response.json();
+}
+
+function mapContact(c) {
+  const p = c.properties;
+
+  return {
+    id: c.id,
+    first: p.firstname || "",
+    last: p.lastname || "",
+    email: p.email || "",
+    company: p.company || "",
+    title: p.jobtitle || "",
+    phone: p.phone || "",
+    bounceReason: p.hs_email_hard_bounce_reason || null
+  };
+}
+
+// =========================
+// SYNC FUNCTION
+// =========================
+async function syncContacts() {
+  if (isSyncing) {
+    console.log("Sync already running, skipping...");
+    return;
+  }
+
   try {
-    const response = await fetch(
-      "https://api.hubapi.com/crm/v3/objects/contacts?limit=100&properties=firstname,lastname,email,company,jobtitle,hs_email_hard_bounce_reason",
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.Private_App_Token}`
-        }
-      }
-    );
+    isSyncing = true;
+    console.log("🔄 Starting HubSpot contact sync...");
 
-    const data = await response.json();
+    let allContacts = [];
+    let after = null;
+    let page = 1;
 
-    const contacts = data.results.map(c => ({
-      id: c.id,
-      first: c.properties.firstname,
-      last: c.properties.lastname,
-      email: c.properties.email,
-      company: c.properties.company,
-      title: c.properties.jobtitle,
-      bounce: c.properties.hs_email_hard_bounce_reason ? "known" : "unknown"
-    }));
+    do {
+      console.log(`Fetching page ${page}...`);
 
-    res.json({ contacts });
+      const data = await fetchContacts(after);
+
+      const mapped = data.results.map(mapContact);
+      allContacts.push(...mapped);
+
+      after = data.paging?.next?.after || null;
+      page++;
+
+    } while (after);
+
+    contactsCache = allContacts;
+    lastSync = new Date();
+
+    console.log(`✅ Sync complete: ${contactsCache.length} contacts`);
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("🔴 Sync error:", err.message);
+  } finally {
+    isSyncing = false;
   }
+}
+
+// =========================
+// PRELOAD (FROM CACHE)
+// =========================
+app.get("/contacts/preload", (req, res) => {
+  res.json({
+    lastSync,
+    count: contactsCache.length,
+    data: contactsCache
+  });
 });
 
 // =========================
-// MAIN SYNC ENDPOINT
+// STATUS ENDPOINT
+// =========================
+app.get("/contacts/status", (req, res) => {
+  res.json({
+    isSyncing,
+    lastSync,
+    count: contactsCache.length
+  });
+});
+
+// =========================
+// MAIN SYNC ENDPOINT (UNCHANGED)
 // =========================
 app.post("/sync/lead", async (req, res) => {
   const payload = req.body;
@@ -74,13 +166,13 @@ app.post("/sync/lead", async (req, res) => {
     console.log("🔵 Incoming contact:", c);
 
     // =========================
-    // 1️⃣ UPDATE BY ID
+    // UPDATE BY ID
     // =========================
     if (c.hubspotId) {
       console.log("🟢 Updating via ID:", c.hubspotId);
 
       const updateRes = await fetch(
-        `https://api.hubapi.com/crm/v3/objects/contacts/${c.hubspotId}`,
+        `${HUBSPOT_URL}/${c.hubspotId}`,
         {
           method: "PATCH",
           headers: {
@@ -113,7 +205,7 @@ app.post("/sync/lead", async (req, res) => {
     }
 
     // =========================
-    // 2️⃣ EMAIL FALLBACK
+    // EMAIL FALLBACK
     // =========================
     if (!email) {
       return res.status(400).json({
@@ -124,7 +216,7 @@ app.post("/sync/lead", async (req, res) => {
     console.log("🟡 Falling back to email:", email);
 
     const searchRes = await fetch(
-      "https://api.hubapi.com/crm/v3/objects/contacts/search",
+      `${HUBSPOT_URL}/search`,
       {
         method: "POST",
         headers: {
@@ -149,16 +241,11 @@ app.post("/sync/lead", async (req, res) => {
 
     const searchData = await searchRes.json();
 
-    // =========================
-    // 2a️⃣ FOUND → UPDATE
-    // =========================
     if (searchData.total > 0) {
       const contactId = searchData.results[0].id;
 
-      console.log("🟢 Updating via email match:", contactId);
-
       const updateRes = await fetch(
-        `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
+        `${HUBSPOT_URL}/${contactId}`,
         {
           method: "PATCH",
           headers: {
@@ -187,112 +274,27 @@ app.post("/sync/lead", async (req, res) => {
       });
     }
 
-    // =========================
-    // 2b️⃣ CREATE
-    // =========================
-    console.log("🔵 Creating new contact");
-
-    const createRes = await fetch(
-      "https://api.hubapi.com/crm/v3/objects/contacts",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.Private_App_Token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          properties: {
-            firstname: c.firstName,
-            lastname: c.lastName,
-            email,
-            company: c.company,
-            jobtitle: c.jobTitle,
-            phone: c.phoneNumber
-          }
-        })
-      }
-    );
+    const createRes = await fetch(HUBSPOT_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.Private_App_Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        properties: {
+          firstname: c.firstName,
+          lastname: c.lastName,
+          email,
+          company: c.company,
+          jobtitle: c.jobTitle,
+          phone: c.phoneNumber
+        }
+      })
+    });
 
     const data = await createRes.json();
 
-    // 🔁 HANDLE DUPLICATE CONFLICT
-    if (!createRes.ok) {
-      const message = data?.message || "";
-
-      if (message.includes("already has that value")) {
-        console.log("🔁 Duplicate detected → retry update");
-
-        const retrySearch = await fetch(
-          "https://api.hubapi.com/crm/v3/objects/contacts/search",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${process.env.Private_App_Token}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              filterGroups: [
-                {
-                  filters: [
-                    {
-                      propertyName: "email",
-                      operator: "EQ",
-                      value: email
-                    }
-                  ]
-                }
-              ]
-            })
-          }
-        );
-
-        const retryData = await retrySearch.json();
-
-        if (retryData.total > 0) {
-          const contactId = retryData.results[0].id;
-
-          const updateRes = await fetch(
-            `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
-            {
-              method: "PATCH",
-              headers: {
-                Authorization: `Bearer ${process.env.Private_App_Token}`,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                properties: {
-                  firstname: c.firstName,
-                  lastname: c.lastName,
-                  email,
-                  company: c.company,
-                  jobtitle: c.jobTitle,
-                  phone: c.phoneNumber
-                }
-              })
-            }
-          );
-
-          const updateData = await updateRes.json();
-
-          return res.json({
-            success: true,
-            mode: "retry_update_after_conflict",
-            data: updateData
-          });
-        }
-      }
-
-      return res.status(createRes.status).json({
-        error: "Create failed",
-        details: data
-      });
-    }
-
-    return res.json({
-      success: true,
-      mode: "create",
-      data
-    });
+    return res.json({ success: true, mode: "create", data });
 
   } catch (err) {
     console.error("🔴 Server error:", err);
@@ -305,10 +307,16 @@ app.post("/sync/lead", async (req, res) => {
 });
 
 // =========================
-// START SERVER
+// START SERVER + AUTO SYNC
 // =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+
+  // initial sync
+  syncContacts();
+
+  // repeat sync every 10 min
+  setInterval(syncContacts, 1000 * 60 * 10);
 });

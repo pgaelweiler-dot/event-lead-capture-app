@@ -10,6 +10,7 @@ const app = express();
 // =========================
 // CACHE
 // =========================
+let companiesCache = [];
 let contactsCache = [];
 let lastSync = null;
 let isSyncing = false;
@@ -81,9 +82,18 @@ async function fetchCompaniesByIds(ids) {
 }
 
 // =========================
-// SYNC COMPANIES
+// (OPTIONAL FUTURE) FETCH CONTACTS
 // =========================
-async function syncCompanies() {
+// NOTE: not implemented yet — placeholder for later
+async function fetchContactsForCompanies(companyIds) {
+  // future: fetch all contacts associated to companies
+  return [];
+}
+
+// =========================
+// SYNC
+// =========================
+async function syncData() {
   if (isSyncing) {
     console.log("Sync already running, skipping...");
     return;
@@ -91,7 +101,7 @@ async function syncCompanies() {
 
   try {
     isSyncing = true;
-    console.log("🔄 Starting company sync...");
+    console.log("🔄 Starting sync...");
 
     const idSet = new Set();
 
@@ -125,11 +135,6 @@ async function syncCompanies() {
       const data = await fetchCompaniesByIds(chunk);
 
       (data.results || []).forEach(c => {
-        console.log("---- COMPANY DEBUG ----");
-        console.log("Company ID:", c.id);
-        console.log("Company name:", c.properties.name);
-        console.log("RAW pattern field:", c.properties.n4f_email_patterns);
-
         let patterns = [];
 
         try {
@@ -137,25 +142,27 @@ async function syncCompanies() {
             patterns = JSON.parse(c.properties.n4f_email_patterns);
           }
         } catch (err) {
-          console.error("❌ JSON PARSE ERROR:", err.message);
-          console.log("Problematic value:", c.properties.n4f_email_patterns);
+          console.error("❌ Pattern parse error:", err.message);
         }
 
-        console.log("Parsed patterns:", patterns);
-
-        if (patterns.length > 0) {
-          companies.push({
-            name: c.properties.name,
-            patterns
-          });
-        }
+        companies.push({
+          id: c.id,
+          name: c.properties.name,
+          patterns
+        });
       });
     }
 
-    contactsCache = companies;
+    companiesCache = companies;
+
+    // 🔜 future: contacts sync (not yet implemented)
+    contactsCache = [];
+
     lastSync = new Date();
 
-    console.log("✅ Company sync complete:", companies.length);
+    console.log("✅ Sync complete");
+    console.log("Companies:", companiesCache.length);
+    console.log("Contacts:", contactsCache.length);
 
   } catch (err) {
     console.error("🔴 Sync error:", err.message);
@@ -167,6 +174,17 @@ async function syncCompanies() {
 // =========================
 // ROUTES
 // =========================
+
+// ✅ COMPANIES (INTELLIGENCE)
+app.get("/companies/preload", (req, res) => {
+  res.json({
+    lastSync,
+    count: companiesCache.length,
+    data: companiesCache
+  });
+});
+
+// ⚠️ CONTACTS (NOT IMPLEMENTED YET)
 app.get("/contacts/preload", (req, res) => {
   res.json({
     lastSync,
@@ -175,11 +193,12 @@ app.get("/contacts/preload", (req, res) => {
   });
 });
 
-app.get("/contacts/status", (req, res) => {
+app.get("/status", (req, res) => {
   res.json({
     isSyncing,
     lastSync,
-    count: contactsCache.length
+    companies: companiesCache.length,
+    contacts: contactsCache.length
   });
 });
 
@@ -191,6 +210,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 
-  syncCompanies();
-  setInterval(syncCompanies, 1000 * 60 * 10);
+  syncData();
+  setInterval(syncData, 1000 * 60 * 10);
 });

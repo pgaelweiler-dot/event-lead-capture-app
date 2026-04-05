@@ -2,18 +2,10 @@ import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
 import dotenv from "dotenv";
-import hubspot from "@hubspot/api-client";
 
 dotenv.config();
 
 const app = express();
-
-// =========================
-// HUBSPOT CLIENT
-// =========================
-const hubspotClient = new hubspot.Client({
-  accessToken: process.env.Private_App_Token
-});
 
 // =========================
 // CONFIG
@@ -23,7 +15,6 @@ const TOKEN = process.env.Private_App_Token;
 
 const TOUCHPOINT_OBJECT_TYPE = "2-133310485";
 const ASSOCIATION_TOUCHPOINT_TO_CONTACT = 22;
-const ASSOCIATION_CONTACT_TO_TOUCHPOINT = 23;
 
 // =========================
 // MIDDLEWARE
@@ -71,47 +62,42 @@ async function createTouchpoint(eventName) {
 }
 
 // =========================
-// ASSOCIATION (SDK)
+// ASSOCIATION (REST - BULLETPROOF)
 // =========================
 async function associate(contactId, touchpointId) {
-  console.log("🔗 Creating associations via SDK...");
+  console.log("🔗 Creating association (batch REST)...");
 
-  console.log("🔍 Association input:", {
-    contactId,
-    touchpointId,
-    ASSOCIATION_TOUCHPOINT_TO_CONTACT,
-    ASSOCIATION_CONTACT_TO_TOUCHPOINT
+  const url = `${HUBSPOT_BASE}/crm/v4/associations/${TOUCHPOINT_OBJECT_TYPE}/contacts/batch/create`;
+
+  const body = {
+    inputs: [
+      {
+        from: { id: String(touchpointId) },
+        to: { id: String(contactId) },
+        types: [
+          {
+            associationCategory: "USER_DEFINED",
+            associationTypeId: ASSOCIATION_TOUCHPOINT_TO_CONTACT
+          }
+        ]
+      }
+    ]
+  };
+
+  console.log("🔍 Association payload:", JSON.stringify(body, null, 2));
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
   });
 
-  // Touchpoint → Contact
-  await hubspotClient.crm.associations.v4.basicApi.create(
-    TOUCHPOINT_OBJECT_TYPE,
-    String(touchpointId),
-    "contacts",
-    String(contactId),
-    [
-      {
-        associationCategory: "USER_DEFINED",
-        associationTypeId: ASSOCIATION_TOUCHPOINT_TO_CONTACT
-      }
-    ]
-  );
+  const data = await res.json();
 
-  // Contact → Touchpoint
-  await hubspotClient.crm.associations.v4.basicApi.create(
-    "contacts",
-    String(contactId),
-    TOUCHPOINT_OBJECT_TYPE,
-    String(touchpointId),
-    [
-      {
-        associationCategory: "USER_DEFINED",
-        associationTypeId: ASSOCIATION_CONTACT_TO_TOUCHPOINT
-      }
-    ]
-  );
-
-  console.log("✅ Association complete (SDK)");
+  console.log("🔗 Association result:", data);
 }
 
 // =========================

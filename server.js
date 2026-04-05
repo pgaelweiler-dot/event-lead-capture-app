@@ -23,6 +23,11 @@ const COMPANY_LIST_IDS = (process.env.HUBSPOT_COMPANY_LIST_IDS || "")
   .map(id => id.trim())
   .filter(Boolean);
 
+const CONTACT_LIST_IDS = (process.env.HUBSPOT_LIST_IDS || "")
+  .split(",")
+  .map(id => id.trim())
+  .filter(Boolean);
+
 // =========================
 // MIDDLEWARE
 // =========================
@@ -42,9 +47,9 @@ app.get("/", (req, res) => {
 });
 
 // =========================
-// FETCH COMPANY LIST MEMBERS
+// HUBSPOT HELPERS
 // =========================
-async function fetchCompanyListMembers(listId, after = null) {
+async function fetchListMembers(objectType, listId, after = null) {
   const url = new URL(`https://api.hubapi.com/crm/v3/lists/${listId}/memberships`);
 
   url.searchParams.append("limit", "100");
@@ -59,9 +64,6 @@ async function fetchCompanyListMembers(listId, after = null) {
   return response.json();
 }
 
-// =========================
-// FETCH COMPANIES
-// =========================
 async function fetchCompaniesByIds(ids) {
   const response = await fetch(
     "https://api.hubapi.com/crm/v3/objects/companies/batch/read",
@@ -81,57 +83,68 @@ async function fetchCompaniesByIds(ids) {
   return response.json();
 }
 
-// =========================
-// (OPTIONAL FUTURE) FETCH CONTACTS
-// =========================
-// NOTE: not implemented yet — placeholder for later
-async function fetchContactsForCompanies(companyIds) {
-  // future: fetch all contacts associated to companies
-  return [];
+async function fetchContactsByIds(ids) {
+  const response = await fetch(
+    "https://api.hubapi.com/crm/v3/objects/contacts/batch/read",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.Private_App_Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        properties: [
+          "firstname",
+          "lastname",
+          "email",
+          "company",
+          "jobtitle",
+          "hs_email_bounce"
+        ],
+        inputs: ids.map(id => ({ id }))
+      })
+    }
+  );
+
+  return response.json();
 }
 
 // =========================
 // SYNC
 // =========================
 async function syncData() {
-  if (isSyncing) {
-    console.log("Sync already running, skipping...");
-    return;
-  }
+  if (isSyncing) return;
 
   try {
     isSyncing = true;
     console.log("🔄 Starting sync...");
 
-    const idSet = new Set();
+    // =========================
+    // 1. COMPANIES (LIST-BASED)
+    // =========================
+    const companyIdSet = new Set();
 
-    // 1. GET COMPANY IDS
     for (const listId of COMPANY_LIST_IDS) {
-      console.log("Processing company list:", listId);
-
       let after = null;
 
       do {
-        const data = await fetchCompanyListMembers(listId, after);
+        const data = await fetchListMembers("companies", listId, after);
 
         (data.results || []).forEach(r => {
-          if (r.recordId) idSet.add(r.recordId);
+          if (r.recordId) companyIdSet.add(r.recordId);
         });
 
         after = data.paging?.next?.after || null;
-
       } while (after);
     }
 
-    const ids = Array.from(idSet);
-    console.log("Total company IDs:", ids.length);
+    const companyIds = Array.from(companyIdSet);
 
-    // 2. FETCH COMPANIES
-    const chunkSize = 100;
     const companies = [];
+    const chunkSize = 100;
 
-    for (let i = 0; i < ids.length; i += chunkSize) {
-      const chunk = ids.slice(i, i + chunkSize);
+    for (let i = 0; i < companyIds.length; i += chunkSize) {
+      const chunk = companyIds.slice(i, i + chunkSize);
       const data = await fetchCompaniesByIds(chunk);
 
       (data.results || []).forEach(c => {
@@ -141,9 +154,7 @@ async function syncData() {
           if (c.properties.n4f_email_patterns) {
             patterns = JSON.parse(c.properties.n4f_email_patterns);
           }
-        } catch (err) {
-          console.error("❌ Pattern parse error:", err.message);
-        }
+        } catch {}
 
         companies.push({
           id: c.id,
@@ -155,14 +166,55 @@ async function syncData() {
 
     companiesCache = companies;
 
-    // 🔜 future: contacts sync (not yet implemented)
-    contactsCache = [];
+    console.log("Companies synced:", companies.length);
+
+    // =========================
+    // 2. CONTACTS (LIST-BASED ✅ FIXED)
+    // =========================
+    const contactIdSet = new Set();
+
+    for (const listId of CONTACT_LIST_IDS) {
+      let after = null;
+
+      do {
+        const data = await fetchListMembers("contacts", listId, after);
+
+        (data.results || []).forEach(r => {
+          if (r.recordId) contactIdSet.add(r.recordId);
+        });
+
+        after = data.paging?.next?.after || null;
+      } while (after);
+    }
+
+    const contactIds = Array.from(contactIdSet);
+
+    const contacts = [];
+
+    for (let i = 0; i < contactIds.length; i += chunkSize) {
+      const chunk = contactIds.slice(i, i + chunkSize);
+      const data = await fetchContactsByIds(chunk);
+
+      (data.results || []).forEach(c => {
+        contacts.push({
+          id: c.id,
+          first: c.properties.firstname || "",
+          last: c.properties.lastname || "",
+          email: c.properties.email || "",
+          company: c.properties.company || "",
+          title: c.properties.jobtitle || "",
+          bounce: c.properties.hs_email_bounce === "true"
+        });
+      });
+    }
+
+    contactsCache = contacts;
+
+    console.log("Contacts synced:", contacts.length);
 
     lastSync = new Date();
 
     console.log("✅ Sync complete");
-    console.log("Companies:", companiesCache.length);
-    console.log("Contacts:", contactsCache.length);
 
   } catch (err) {
     console.error("🔴 Sync error:", err.message);
@@ -174,8 +226,6 @@ async function syncData() {
 // =========================
 // ROUTES
 // =========================
-
-// ✅ COMPANIES (INTELLIGENCE)
 app.get("/companies/preload", (req, res) => {
   res.json({
     lastSync,
@@ -184,7 +234,6 @@ app.get("/companies/preload", (req, res) => {
   });
 });
 
-// ⚠️ CONTACTS (NOT IMPLEMENTED YET)
 app.get("/contacts/preload", (req, res) => {
   res.json({
     lastSync,

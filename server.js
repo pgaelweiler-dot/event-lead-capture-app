@@ -28,85 +28,93 @@ const CONTACT_LIST_IDS = (process.env.HUBSPOT_LIST_IDS || "")
   .map(id => id.trim())
   .filter(Boolean);
 
+const HUBSPOT_BASE = "https://api.hubapi.com";
+const TOKEN = process.env.Private_App_Token;
+
 // =========================
 // MIDDLEWARE
 // =========================
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"]
-}));
-
+app.use(cors({ origin: "*", methods: ["GET", "POST"], allowedHeaders: ["Content-Type"] }));
 app.use(express.json());
 
 // =========================
 // HEALTH
 // =========================
-app.get("/", (req, res) => {
-  res.send("Lead Sync API running");
-});
+app.get("/", (req, res) => res.send("Lead Sync API running"));
 
 // =========================
-// HUBSPOT HELPERS
+// HELPERS
 // =========================
-async function fetchListMembers(objectType, listId, after = null) {
-  const url = new URL(`https://api.hubapi.com/crm/v3/lists/${listId}/memberships`);
-
+async function fetchListMembers(listId, after = null) {
+  const url = new URL(`${HUBSPOT_BASE}/crm/v3/lists/${listId}/memberships`);
   url.searchParams.append("limit", "100");
   if (after) url.searchParams.append("after", after);
 
   const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${process.env.Private_App_Token}`
-    }
+    headers: { Authorization: `Bearer ${TOKEN}` }
   });
 
   return response.json();
 }
 
 async function fetchCompaniesByIds(ids) {
-  const response = await fetch(
-    "https://api.hubapi.com/crm/v3/objects/companies/batch/read",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.Private_App_Token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        properties: ["name", "n4f_email_patterns"],
-        inputs: ids.map(id => ({ id }))
-      })
-    }
-  );
+  const response = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/companies/batch/read`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      properties: ["name", "n4f_email_patterns"],
+      inputs: ids.map(id => ({ id }))
+    })
+  });
 
   return response.json();
 }
 
 async function fetchContactsByIds(ids) {
-  const response = await fetch(
-    "https://api.hubapi.com/crm/v3/objects/contacts/batch/read",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.Private_App_Token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        properties: [
-          "firstname",
-          "lastname",
-          "email",
-          "company",
-          "jobtitle",
-          "hs_email_bounce"
-        ],
-        inputs: ids.map(id => ({ id }))
-      })
-    }
-  );
+  const response = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      properties: ["firstname", "lastname", "email", "company", "jobtitle", "hs_email_bounce"],
+      inputs: ids.map(id => ({ id }))
+    })
+  });
 
   return response.json();
+}
+
+// =========================
+// PROPERTY MAPPING
+// =========================
+const CONTACT_PROPERTY_MAP = {
+  preferredLanguage: "preferred_language",
+  interestLevel: "n4f_interest_level",
+  followUpRequested: "n4f_follow_up_requested"
+};
+
+function mapToHubSpotProperties(payload) {
+  const props = {};
+
+  if (payload.extracted?.firstName) props.firstname = payload.extracted.firstName;
+  if (payload.extracted?.lastName) props.lastname = payload.extracted.lastName;
+  if (payload.extracted?.email) props.email = payload.extracted.email;
+  if (payload.extracted?.company) props.company = payload.extracted.company;
+  if (payload.extracted?.jobTitle) props.jobtitle = payload.extracted.jobTitle;
+
+  for (const [frontendKey, hubspotKey] of Object.entries(CONTACT_PROPERTY_MAP)) {
+    const value = payload.protocol?.[frontendKey];
+    if (value !== undefined && value !== null) {
+      props[hubspotKey] = value;
+    }
+  }
+
+  return props;
 }
 
 // =========================
@@ -119,80 +127,57 @@ async function syncData() {
     isSyncing = true;
     console.log("🔄 Starting sync...");
 
-    // =========================
-    // 1. COMPANIES (LIST-BASED)
-    // =========================
+    // ---------- COMPANIES ----------
     const companyIdSet = new Set();
 
     for (const listId of COMPANY_LIST_IDS) {
       let after = null;
-
       do {
-        const data = await fetchListMembers("companies", listId, after);
-
-        (data.results || []).forEach(r => {
-          if (r.recordId) companyIdSet.add(r.recordId);
-        });
-
+        const data = await fetchListMembers(listId, after);
+        (data.results || []).forEach(r => r.recordId && companyIdSet.add(r.recordId));
         after = data.paging?.next?.after || null;
       } while (after);
     }
 
     const companyIds = Array.from(companyIdSet);
-
     const companies = [];
-    const chunkSize = 100;
 
-    for (let i = 0; i < companyIds.length; i += chunkSize) {
-      const chunk = companyIds.slice(i, i + chunkSize);
+    for (let i = 0; i < companyIds.length; i += 100) {
+      const chunk = companyIds.slice(i, i + 100);
       const data = await fetchCompaniesByIds(chunk);
 
       (data.results || []).forEach(c => {
         let patterns = [];
-
         try {
           if (c.properties.n4f_email_patterns) {
             patterns = JSON.parse(c.properties.n4f_email_patterns);
           }
         } catch {}
 
-        companies.push({
-          id: c.id,
-          name: c.properties.name,
-          patterns
-        });
+        companies.push({ id: c.id, name: c.properties.name, patterns });
       });
     }
 
     companiesCache = companies;
-
     console.log("Companies synced:", companies.length);
 
-    // =========================
-    // 2. CONTACTS (LIST-BASED ✅ FIXED)
-    // =========================
+    // ---------- CONTACTS ----------
     const contactIdSet = new Set();
 
     for (const listId of CONTACT_LIST_IDS) {
       let after = null;
-
       do {
-        const data = await fetchListMembers("contacts", listId, after);
-
-        (data.results || []).forEach(r => {
-          if (r.recordId) contactIdSet.add(r.recordId);
-        });
-
+        const data = await fetchListMembers(listId, after);
+        (data.results || []).forEach(r => r.recordId && contactIdSet.add(r.recordId));
         after = data.paging?.next?.after || null;
       } while (after);
     }
 
     const contactIds = Array.from(contactIdSet);
-
     const contacts = [];
 
-    for (let i = 0; i < contactIds.length; i += chunkSize) {
-      const chunk = contactIds.slice(i, i + chunkSize);
+    for (let i = 0; i < contactIds.length; i += 100) {
+      const chunk = contactIds.slice(i, i + 100);
       const data = await fetchContactsByIds(chunk);
 
       (data.results || []).forEach(c => {
@@ -209,11 +194,9 @@ async function syncData() {
     }
 
     contactsCache = contacts;
-
     console.log("Contacts synced:", contacts.length);
 
     lastSync = new Date();
-
     console.log("✅ Sync complete");
 
   } catch (err) {
@@ -224,31 +207,90 @@ async function syncData() {
 }
 
 // =========================
+// SYNC LEAD (🔥 WITH DEBUGGING)
+// =========================
+app.post("/sync/lead", async (req, res) => {
+  try {
+    const payload = req.body;
+
+    console.log("\n================ SYNC START ================");
+    console.log("🟣 FULL PAYLOAD:", JSON.stringify(payload, null, 2));
+
+    const { hubspotId, email } = payload;
+
+    console.log("🧭 Routing decision:", { hubspotId, email });
+
+    const properties = mapToHubSpotProperties(payload);
+    console.log("🧩 MAPPED PROPERTIES:", properties);
+
+    let mode = null;
+
+    if (hubspotId) {
+      mode = "update_by_id";
+      console.log("🟢 Updating by ID:", hubspotId);
+
+      await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/${hubspotId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ properties })
+      });
+
+    } else if (email) {
+      mode = "search_by_email";
+      console.log("🟡 Searching by email:", email);
+
+      // Simplified: create fallback
+      await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ properties })
+      });
+
+    } else {
+      mode = "create";
+      console.log("🔵 Creating new contact");
+
+      await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ properties })
+      });
+    }
+
+    console.log("✅ SYNC DONE MODE:", mode);
+    console.log("===========================================\n");
+
+    res.json({ success: true, mode });
+
+  } catch (err) {
+    console.error("🔴 Sync error:", err.message);
+
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =========================
 // ROUTES
 // =========================
 app.get("/companies/preload", (req, res) => {
-  res.json({
-    lastSync,
-    count: companiesCache.length,
-    data: companiesCache
-  });
+  res.json({ lastSync, count: companiesCache.length, data: companiesCache });
 });
 
 app.get("/contacts/preload", (req, res) => {
-  res.json({
-    lastSync,
-    count: contactsCache.length,
-    data: contactsCache
-  });
+  res.json({ lastSync, count: contactsCache.length, data: contactsCache });
 });
 
 app.get("/status", (req, res) => {
-  res.json({
-    isSyncing,
-    lastSync,
-    companies: companiesCache.length,
-    contacts: contactsCache.length
-  });
+  res.json({ isSyncing, lastSync, companies: companiesCache.length, contacts: contactsCache.length });
 });
 
 // =========================

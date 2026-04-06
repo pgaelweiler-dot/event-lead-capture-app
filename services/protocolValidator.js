@@ -26,6 +26,10 @@ export function validateProtocol(protocol) {
     throw new Error("Protocol missing");
   }
 
+  if (protocol.event_name && !VALID_EVENTS.includes(protocol.event_name)) {
+  console.warn(`Invalid event_name: ${protocol.event_name}`);
+  }
+  
   if (protocol.user && !VALID_USERS.includes(protocol.user)) {
     throw new Error(`Invalid user: ${protocol.user}`);
   }

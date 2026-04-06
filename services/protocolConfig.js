@@ -13,6 +13,11 @@ export const HARDCODED_TOUCHPOINT_FIELDS = {
 // VALID ENUMS
 // ==============================
 
+export const VALID_EVENTS = [
+  "Test Event",
+  "Air Cargo Europe"
+];
+
 export const VALID_QUALITY = [
   "Sales potential",
   "Sales potential unclear",

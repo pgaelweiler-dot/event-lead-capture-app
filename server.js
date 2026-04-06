@@ -3,6 +3,10 @@ import fetch from "node-fetch";
 import cors from "cors";
 import dotenv from "dotenv";
 
+// 🔽 ADD THESE IMPORTS (adjust paths if needed)
+import { validateProtocol } from "./services/protocolValidator.js";
+import { mapProtocolToHubSpot } from "./services/protocolMapper.js";
+
 dotenv.config();
 
 const app = express();
@@ -164,12 +168,15 @@ function parsePatterns(raw) {
 }
 
 // =========================
-// SYNC (unchanged)
+// SYNC (UPDATED WITH PROTOCOL)
 // =========================
 app.post("/sync/lead", async (req, res) => {
   try {
     const payload = req.body;
 
+    // =========================
+    // CONTACT UPSERT
+    // =========================
     const properties = {};
     if (payload.extracted?.firstName) properties.firstname = payload.extracted.firstName;
     if (payload.extracted?.lastName) properties.lastname = payload.extracted.lastName;
@@ -201,6 +208,34 @@ app.post("/sync/lead", async (req, res) => {
       contactId = data.id;
     }
 
+    // =========================
+    // PROTOCOL → TOUCHPOINT
+    // =========================
+
+    let touchpointProperties = {
+      download_name: payload.meta?.event || "Event Interaction"
+    };
+
+    if (payload.protocol) {
+      // 1. Validate
+      const validatedProtocol = validateProtocol(payload.protocol);
+
+      // 2. Map
+      const mapped = mapProtocolToHubSpot(validatedProtocol);
+
+      // 3. Merge
+      touchpointProperties = {
+        ...touchpointProperties,
+        ...mapped
+      };
+
+      console.log("Mapped Touchpoint Properties:", touchpointProperties);
+    }
+
+    // =========================
+    // CREATE TOUCHPOINT
+    // =========================
+
     const tpRes = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${TOUCHPOINT_OBJECT_TYPE}`, {
       method: "POST",
       headers: {
@@ -208,14 +243,16 @@ app.post("/sync/lead", async (req, res) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        properties: {
-          download_name: payload.meta?.event || "Event Interaction"
-        }
+        properties: touchpointProperties
       })
     });
 
     const tpData = await tpRes.json();
     const touchpointId = tpData.id;
+
+    // =========================
+    // ASSOCIATION
+    // =========================
 
     await fetch(`${HUBSPOT_BASE}/crm/v4/associations/${TOUCHPOINT_OBJECT_TYPE}/contacts/batch/create`, {
       method: "POST",

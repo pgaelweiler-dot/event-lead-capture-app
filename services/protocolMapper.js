@@ -1,6 +1,6 @@
 // services/protocolMapper.js
 
-const { HARDCODED_TOUCHPOINT_FIELDS } = require("./protocolConfig");
+import { HARDCODED_TOUCHPOINT_FIELDS } from "./protocolConfig.js";
 
 // ==============================
 // MAPPING CONFIG
@@ -67,8 +67,6 @@ function formatValue(value, type) {
     case "boolean":
       return value === true ? "true" : "false";
 
-    case "single":
-    case "text":
     default:
       return value;
   }
@@ -78,7 +76,7 @@ function formatValue(value, type) {
 // MAPPER
 // ==============================
 
-function mapProtocolToHubSpot(protocol) {
+export function mapProtocolToHubSpot(protocol) {
   const properties = {};
 
   for (const key in PROTOCOL_TO_HUBSPOT_MAPPING) {
@@ -97,7 +95,3 @@ function mapProtocolToHubSpot(protocol) {
     ...properties
   };
 }
-
-module.exports = {
-  mapProtocolToHubSpot
-};

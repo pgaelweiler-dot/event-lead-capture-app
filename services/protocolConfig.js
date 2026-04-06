@@ -4,16 +4,16 @@
 // HARDCODED FIELDS
 // ==============================
 
-const HARDCODED_TOUCHPOINT_FIELDS = {
+export const HARDCODED_TOUCHPOINT_FIELDS = {
   n4f_touchpoint_type: "Event booth Meeting",
   n4f_activity_status: "Booth discussion"
 };
 
 // ==============================
-// VALID ENUMS (STRICT CONTROL)
+// VALID ENUMS
 // ==============================
 
-const VALID_QUALITY = [
+export const VALID_QUALITY = [
   "Sales potential",
   "Sales potential unclear",
   "Contact maintenance",
@@ -23,7 +23,7 @@ const VALID_QUALITY = [
   "Partner"
 ];
 
-const VALID_TOPICS = [
+export const VALID_TOPICS = [
   "SAP Digital Supply Chain",
   "4flow software solutions",
   "Warehousing and intralogistics",
@@ -31,7 +31,7 @@ const VALID_TOPICS = [
   "tbd"
 ];
 
-const VALID_BUSINESS_LINES = [
+export const VALID_BUSINESS_LINES = [
   "4fc",
   "4fm",
   "4fs",
@@ -40,28 +40,7 @@ const VALID_BUSINESS_LINES = [
   "4flow"
 ];
 
-// ⚠️ IMPORTANT: Replace if needed later with ID mapping
-const VALID_USERS = [
-  "Alexander Deger",
-  "Andreas Weber",
-  "Christian Lieberoth-Leden",
-  "Christian Schomann",
-  "Jan-Hendrik Kölling",
-  "Jan-Moritz Metelmann",
-  "Jan-Niklas Grafe",
-  "Joachim Wittmack",
-  "Katharina von Helldorff-Mager",
-    // 👉 Add more if needed
+export const VALID_USERS = [
+  "Patrick Achatz"
+  // add more as needed
 ];
-
-// ==============================
-// EXPORT
-// ==============================
-
-module.exports = {
-  HARDCODED_TOUCHPOINT_FIELDS,
-  VALID_QUALITY,
-  VALID_TOPICS,
-  VALID_BUSINESS_LINES,
-  VALID_USERS
-};

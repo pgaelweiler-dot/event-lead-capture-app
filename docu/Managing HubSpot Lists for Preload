@@ -1,0 +1,52 @@
+📘 1. Quick Guide — Managing HubSpot Lists for Preload
+
+You can reuse this internally or paste into your repo README.
+
+🎯 Purpose
+
+Control which contacts are available for:
+
+matching
+suggestions
+ID-based updates
+🧱 How to Add a New List
+Step 1 — Create or Select List in HubSpot
+Go to: Contacts → Lists
+Create:
+Static list (manual)
+OR Active list (rule-based)
+
+👉 Example:
+
+Event – Transport Logistic 2026
+VIP Contacts
+Existing Customers
+Step 2 — Get List ID
+
+From URL:
+
+https://app-eu1.hubspot.com/.../objectLists/19611
+                                      ↑ THIS
+Step 3 — Add to Backend ENV
+
+In Scalingo:
+
+HUBSPOT_LIST_IDS=19611,12345,67890
+Step 4 — Deploy (or restart)
+
+No code change needed.
+
+⚠️ Rules / Best Practices
+Keep lists focused (1k–5k contacts ideal)
+Avoid dumping entire CRM into a list
+Prefer:
+event-specific lists
+region-based lists
+role-based lists
+🧠 Mental Model
+
+Lists define:
+
+“Who is relevant for this context?”
+
+Your system is no longer global—it is context-aware.

@@ -248,6 +248,12 @@ app.post("/sync/lead", async (req, res) => {
     });
 
     const tpData = await tpRes.json();
+
+    if (!tpRes.ok) {
+      console.warn("⚠️ Touchpoint creation failed but continuing:", tpData);
+    }
+
+    const touchpointId = tpData.id;
     const touchpointId = tpData.id;
 
     // =========================

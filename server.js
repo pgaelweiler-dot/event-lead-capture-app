@@ -133,17 +133,33 @@ app.get("/admin/export/:event", (req, res) => {
       return res.status(404).json({ error: "No data found" });
     }
 
-    const rows = data.records.map(r => ({
-      protocolId: r.protocolId,
-      contactId: r.contactId,
-      touchpointId: r.touchpointId,
-      event: r.payload?.meta?.event,
-      user: r.payload?.meta?.user,
-      quality: r.payload?.protocol?.quality_of_contact,
-      topics: (r.payload?.protocol?.discussed_topics || []).join(", "),
-      comments: r.payload?.protocol?.additional_comments,
-      createdAt: r.payload?.meta?.createdAt
-    }));
+    const rows = data.records.map(r => {
+      const protocol = r.payload?.protocol || {};
+      const meta = r.payload?.meta || {};
+      const extracted = r.payload?.extracted || {};
+
+      return {
+        protocolId: r.protocolId,
+        contactId: r.contactId,
+        touchpointId: r.touchpointId,
+
+        // meta
+        event: meta.event,
+        user: meta.user,
+        createdAt: meta.createdAt,
+
+        // extracted (OCR)
+        firstName: extracted.firstName,
+        lastName: extracted.lastName,
+        company: extracted.company,
+        email: extracted.email,
+        jobTitle: extracted.jobTitle,
+        phone: extracted.phoneNumber,
+
+        // protocol (ALL)
+        ...protocol
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();

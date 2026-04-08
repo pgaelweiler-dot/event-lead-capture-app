@@ -1,229 +1,54 @@
+// =========================
+// server.js (CLEAN)
+// =========================
 import express from "express";
-import fetch from "node-fetch";
 import cors from "cors";
 import dotenv from "dotenv";
 
-// 🔽 ADD THESE IMPORTS (adjust paths if needed)
+import { preloadContacts, preloadCompanies } from "./services/preloadService.js";
+import { upsertContact } from "./services/contactService.js";
+import { createTouchpointAndAssociate } from "./services/touchpointService.js";
 import { validateProtocol } from "./services/protocolValidator.js";
 import { mapProtocolToHubSpot } from "./services/protocolMapper.js";
 
 dotenv.config();
 
 const app = express();
-
-// =========================
-// CONFIG
-// =========================
-const HUBSPOT_BASE = "https://api.hubapi.com";
-const TOKEN = process.env.Private_App_Token;
-
-const HUBSPOT_CONTACT_LIST_IDS = process.env.HUBSPOT_LIST_IDS?.split(",") || [];
-const HUBSPOT_COMPANY_LIST_IDS = process.env.HUBSPOT_COMPANY_LIST_IDS?.split(",") || [];
-
-const TOUCHPOINT_OBJECT_TYPE = "2-133310485";
-const ASSOCIATION_TOUCHPOINT_TO_CONTACT = 22;
-
 app.use(cors());
 app.use(express.json());
 
 // =========================
-// HELPERS
+// PRELOAD ROUTES
 // =========================
-async function fetchListMembers(listId, after = null) {
-  const url = new URL(`${HUBSPOT_BASE}/crm/v3/lists/${listId}/memberships`);
-  url.searchParams.append("limit", "100");
-  if (after) url.searchParams.append("after", after);
-
-  const response = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${TOKEN}` }
-  });
-
-  return response.json();
-}
-
-async function fetchCompaniesByIds(ids) {
-  const response = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/companies/batch/read`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      properties: ["name", "n4f_email_patterns"],
-      inputs: ids.map(id => ({ id }))
-    })
-  });
-
-  return response.json();
-}
-
-async function fetchContactsByIds(ids) {
-  const response = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      properties: ["firstname", "lastname", "email", "company", "jobtitle", "hs_email_bounce"],
-      inputs: ids.map(id => ({ id }))
-    })
-  });
-
-  return response.json();
-}
+app.get("/contacts/preload", preloadContacts);
+app.get("/companies/preload", preloadCompanies);
 
 // =========================
-// CONTACT PRELOAD (LIST)
-// =========================
-app.get("/contacts/preload", async (req, res) => {
-  try {
-    let allIds = [];
-
-    for (const listId of HUBSPOT_CONTACT_LIST_IDS) {
-      let after = null;
-
-      do {
-        const data = await fetchListMembers(listId, after);
-        const ids = data.results?.map(r => r.recordId) || [];
-
-        allIds.push(...ids);
-        after = data.paging?.next?.after || null;
-      } while (after);
-    }
-
-    const uniqueIds = [...new Set(allIds)];
-
-    const batch = await fetchContactsByIds(uniqueIds);
-
-    const contacts = batch.results?.map(c => ({
-      id: c.id,
-      first: c.properties.firstname || "",
-      last: c.properties.lastname || "",
-      email: c.properties.email || "",
-      company: c.properties.company || "",
-      title: c.properties.jobtitle || "",
-      bounce: c.properties.hs_email_bounce
-    })) || [];
-
-    console.log("✅ Contacts loaded:", contacts.length);
-
-    res.json({ data: contacts, count: contacts.length });
-
-  } catch (err) {
-    console.error("🔴 Contact preload failed:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// =========================
-// COMPANY PRELOAD (LIST-BASED)
-// =========================
-app.get("/companies/preload", async (req, res) => {
-  try {
-    let allIds = [];
-
-    for (const listId of HUBSPOT_COMPANY_LIST_IDS) {
-      let after = null;
-
-      do {
-        const data = await fetchListMembers(listId, after);
-        const ids = data.results?.map(r => r.recordId) || [];
-
-        allIds.push(...ids);
-        after = data.paging?.next?.after || null;
-      } while (after);
-    }
-
-    const uniqueIds = [...new Set(allIds)];
-
-    const batch = await fetchCompaniesByIds(uniqueIds);
-
-    const companies = batch.results?.map(c => ({
-      name: c.properties.name,
-      patterns: parsePatterns(c.properties.n4f_email_patterns)
-    })) || [];
-
-    console.log("✅ Companies loaded:", companies.length);
-
-    res.json({ data: companies, count: companies.length });
-
-  } catch (err) {
-    console.error("🔴 Company preload failed:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// =========================
-// PATTERN PARSER
-// =========================
-function parsePatterns(raw) {
-  if (!raw) return [];
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
-}
-
-// =========================
-// SYNC (UPDATED WITH PROTOCOL)
+// SYNC ROUTE
 // =========================
 app.post("/sync/lead", async (req, res) => {
   try {
     const payload = req.body;
 
-    // =========================
-    // CONTACT UPSERT
-    // =========================
-    const properties = {};
-    if (payload.extracted?.firstName) properties.firstname = payload.extracted.firstName;
-    if (payload.extracted?.lastName) properties.lastname = payload.extracted.lastName;
-    if (payload.extracted?.email) properties.email = payload.extracted.email;
-    if (payload.extracted?.company) properties.company = payload.extracted.company;
+    // 1. CONTACT UPSERT
+    const contactId = await upsertContact(payload);
 
-    let contactId = payload.hubspotId;
-
-    if (contactId) {
-      await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/${contactId}`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ properties })
-      });
-    } else {
-      const resCreate = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ properties })
-      });
-
-      const data = await resCreate.json();
-      contactId = data.id;
-    }
-
-    // =========================
-    // PROTOCOL → TOUCHPOINT
-    // =========================
-
+    // 2. PROTOCOL → TOUCHPOINT
     let touchpointProperties = {
       download_name: payload.meta?.event || "Event Interaction"
     };
 
     if (payload.protocol) {
-      // 1. Validate
-      const validatedProtocol = validateProtocol(payload.protocol);
+      let validatedProtocol = payload.protocol;
 
-      // 2. Map
+      try {
+        validatedProtocol = validateProtocol(payload.protocol);
+      } catch (err) {
+        console.warn("⚠️ Protocol validation warning:", err.message);
+      }
+
       const mapped = mapProtocolToHubSpot(validatedProtocol);
 
-      // 3. Merge
       touchpointProperties = {
         ...touchpointProperties,
         ...mapped
@@ -232,57 +57,11 @@ app.post("/sync/lead", async (req, res) => {
       console.log("Mapped Touchpoint Properties:", touchpointProperties);
     }
 
-    // =========================
-    // CREATE TOUCHPOINT
-    // =========================
-
-    const tpRes = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${TOUCHPOINT_OBJECT_TYPE}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        properties: touchpointProperties
-      })
-    });
-
-    const tpData = await tpRes.json();
-//log//
-    console.log("🔵 Touchpoint response:", tpData);
-
-    if (!tpRes.ok) {
-      console.warn("⚠️ Touchpoint creation failed but continuing:", tpData);
-    }
-
-    const touchpointId = tpData.id;
-    const touchpointId = tpData.id;
-
-    // =========================
-    // ASSOCIATION
-    // =========================
-
-    await fetch(`${HUBSPOT_BASE}/crm/v4/associations/${TOUCHPOINT_OBJECT_TYPE}/contacts/batch/create`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        inputs: [
-          {
-            from: { id: touchpointId },
-            to: { id: contactId },
-            types: [
-              {
-                associationCategory: "USER_DEFINED",
-                associationTypeId: ASSOCIATION_TOUCHPOINT_TO_CONTACT
-              }
-            ]
-          }
-        ]
-      })
-    });
+    // 3. CREATE TOUCHPOINT + ASSOCIATE
+    const touchpointId = await createTouchpointAndAssociate(
+      touchpointProperties,
+      contactId
+    );
 
     res.json({ success: true, contactId, touchpointId });
 
@@ -292,8 +71,5 @@ app.post("/sync/lead", async (req, res) => {
   }
 });
 
-// =========================
-// START
-// =========================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on ${PORT}`));

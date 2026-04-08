@@ -1,0 +1,155 @@
+USER GUIDE — Working with Your Current System
+
+This is how your system behaves and how to safely extend it.
+
+🧩 1. How dropdown values work (CRITICAL)
+
+Your system has 3 layers:
+
+Frontend → Backend → HubSpot
+🔑 Rule
+HubSpot is the source of truth for dropdown values
+🧠 Example
+
+Property:
+
+n4f_touchpoint_type
+
+HubSpot options:
+
+Event booth meeting
+Webinar
+...
+❗ IMPORTANT
+
+This will FAIL:
+
+"Event booth Meeting" ❌
+
+This will WORK:
+
+"Event booth meeting" ✅
+✏️ 2. How to add a NEW dropdown value
+Step 1 — HubSpot
+
+Add value in property:
+
+Settings → Properties → Touchpoint → Edit property
+Step 2 — Backend (validator)
+
+Add to:
+
+VALID_*
+
+Example:
+
+VALID_EVENTS.push("New Event")
+
+🔄 3. How updates work (NEW behavior)
+
+Now your system is:
+
+protocolId → touchpointId → update
+First scan
+→ CREATE contact
+→ CREATE touchpoint
+→ STORE protocol
+Second sync (same item)
+→ UPDATE touchpoint (no duplicate)
+Requirement
+
+Frontend must store:
+
+touchpointId
+protocolId
+🗂️ 4. Your backend storage
+
+Stored in:
+
+/data/protocols.json
+Structure
+{
+  "protocolId": "...",
+  "touchpointId": "...",
+  "contactId": "...",
+  "payload": {...},
+  "status": "synced"
+}
+Use cases
+debugging
+re-sync
+audit trail
+future analytics
+🛠️ 5. How to debug issues
+Case 1 — Touchpoint not created
+
+Check:
+
+🔵 Touchpoint attempt
+
+If missing → mapper issue
+
+Case 2 — Validation error
+
+Look for:
+
+INVALID_OPTION
+
+→ always dropdown mismatch
+
+Case 3 — Duplicate contact
+
+Check:
+
+email present?
+
+If no → duplicate expected
+
+⚠️ 6. Known limitations (current state)
+
+You currently still have:
+
+❌ No identity resolution
+Same person without email → new contact
+❌ Frontend controlled schema
+protocolSchema still frontend-based
+❌ No DB (JSON only)
+
+Fine for now, but not scalable
+
+🚀 7. Recommended workflow for events
+Before event
+Update:
+contact lists (env)
+company lists (env)
+Check:
+dropdown values
+users list
+During event
+Scan → Review → Save → Queue → Sync
+After event
+Check:
+protocols.json
+Spot-check HubSpot:
+contacts
+touchpoints
+🧠 8. Golden rules (very important)
+1. Never guess dropdown values
+
+Always copy from HubSpot
+
+2. Always send protocolId
+
+This is your:
+
+single source of truth
+3. Never break mapping layer
+
+Keep backend mapping clean:
+
+protocol → hubspot property
+4. Prefer warnings over errors
+
+Your system is now:
+
+resilient > strict

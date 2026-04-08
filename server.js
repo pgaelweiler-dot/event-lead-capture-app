@@ -248,6 +248,8 @@ app.post("/sync/lead", async (req, res) => {
     });
 
     const tpData = await tpRes.json();
+//log//
+    console.log("🔵 Touchpoint response:", tpData);
 
     if (!tpRes.ok) {
       console.warn("⚠️ Touchpoint creation failed but continuing:", tpData);

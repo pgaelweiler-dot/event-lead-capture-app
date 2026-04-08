@@ -5,7 +5,7 @@
 // ==============================
 
 export const HARDCODED_TOUCHPOINT_FIELDS = {
-  n4f_touchpoint_type: "Event booth Meeting",
+  n4f_touchpoint_type: "Event booth meeting",
   n4f_activity_status: "Booth discussion"
 };
 

@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 
 import { preloadContacts, preloadCompanies } from "./services/preloadService.js";
 import { upsertContact } from "./services/contactService.js";
-import { createTouchpointAndAssociate } from "./services/touchpointService.js";
+import { createOrUpdateTouchpoint } from "./services/touchpointService.js";
 import { validateProtocol } from "./services/protocolValidator.js";
 import { mapProtocolToHubSpot } from "./services/protocolMapper.js";
 
@@ -58,9 +58,10 @@ app.post("/sync/lead", async (req, res) => {
     }
 
     // 3. CREATE TOUCHPOINT + ASSOCIATE
-    const touchpointId = await createTouchpointAndAssociate(
+    const touchpointId = await createOrUpdateTouchpoint(
       touchpointProperties,
-      contactId
+      contactId,
+      payload
     );
 
     res.json({ success: true, contactId, touchpointId });

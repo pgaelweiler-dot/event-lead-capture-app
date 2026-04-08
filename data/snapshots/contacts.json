@@ -1,0 +1,10 @@
+[
+  {
+    "id": "123",
+    "first": "John",
+    "last": "Doe",
+    "email": "john@company.com",
+    "company": "Company",
+    "domain": "company.com"
+  }
+]

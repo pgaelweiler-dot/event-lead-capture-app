@@ -65,7 +65,8 @@ function formatValue(value, type) {
       return Array.isArray(value) ? value.join(";") : value;
 
     case "boolean":
-      return value === true ? "true" : "false";
+    if (value === true) return "yes";
+    if (value === false) return "no";
 
     default:
       return value;

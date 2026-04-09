@@ -1,5 +1,5 @@
 // =========================
-// server.js (FULL WORKING VERSION)
+// server.js (FULL WORKING VERSION + SCHEDULER)
 // =========================
 import express from "express";
 import cors from "cors";
@@ -17,6 +17,9 @@ import {
   getContactsSnapshot,
   getCompaniesSnapshot
 } from "./services/snapshotService.js";
+
+// ✅ NEW: Scheduler
+import { startScheduler } from "./scheduler.js";
 
 dotenv.config();
 
@@ -195,7 +198,14 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+// =========================
+// START SERVER
+// =========================
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log("Server running on", PORT);
+
+  // ✅ Start scheduler after boot
+  startScheduler();
 });

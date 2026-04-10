@@ -20,7 +20,7 @@ import {
 } from "./services/snapshotService.js";
 
 // ✅ Scheduler
-import { startScheduler } from "./scheduler.js";
+import { startScheduler } from "./services/scheduler.js";
 
 dotenv.config();
 

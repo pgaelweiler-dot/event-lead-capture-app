@@ -1,5 +1,5 @@
 // =========================
-// services/touchpointService.js
+// services/touchpointService.js (FINAL - FULL + UPDATE SAFE)
 // =========================
 import fetch from "node-fetch";
 
@@ -9,7 +9,7 @@ const TOUCHPOINT_OBJECT_TYPE = "2-133310485";
 const ASSOCIATION_TYPE = 22;
 
 // =========================
-// CREATE WITH RETRY (GRACEFUL)
+// CREATE WITH RETRY (UNCHANGED)
 // =========================
 async function createWithFallback(properties) {
   let attemptProps = { ...properties };
@@ -31,7 +31,7 @@ async function createWithFallback(properties) {
 
     if (res.ok) return data;
 
-    // Remove invalid fields and retry
+    // remove invalid fields
     if (data?.errors) {
       for (const err of data.errors) {
         const field = err.context?.name;
@@ -61,33 +61,38 @@ export async function createOrUpdateTouchpoint(properties, contactId, payload) {
     properties.n4f_protocol_id = payload.protocolId;
   }
 
-  let touchpointId = payload?.touchpointId;
+  let touchpointId = payload?.hubspot?.touchpointId;
 
   // =========================
-  // UPDATE EXISTING
+  // UPDATE EXISTING (NEW)
   // =========================
   if (touchpointId) {
-    const updateRes = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${TOUCHPOINT_OBJECT_TYPE}/${touchpointId}`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ properties })
-    });
+    const updateRes = await fetch(
+      `${HUBSPOT_BASE}/crm/v3/objects/${TOUCHPOINT_OBJECT_TYPE}/${touchpointId}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ properties })
+      }
+    );
 
     const updateData = await updateRes.json();
 
     console.log("🟡 Touchpoint update response:", updateData);
 
-    if (!updateRes.ok) {
-      console.warn("⚠️ Update failed → fallback to create");
-      touchpointId = null;
+    if (updateRes.ok) {
+      return touchpointId; // ✅ SUCCESSFUL UPDATE
     }
+
+    console.warn("⚠️ Update failed → fallback to create");
+    touchpointId = null;
   }
 
   // =========================
-  // CREATE NEW (WITH RETRY)
+  // CREATE NEW (UNCHANGED LOGIC)
   // =========================
   if (!touchpointId) {
     const tpData = await createWithFallback(properties);

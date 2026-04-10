@@ -1,5 +1,5 @@
 // =========================
-// services/snapshotService.js
+// snapshotService.js (UPDATED: VERSIONING + pd_language)
 // =========================
 import fs from "fs";
 import fetch from "node-fetch";
@@ -9,240 +9,276 @@ const TOKEN = process.env.Private_App_Token;
 
 const CONTACTS_PATH = "./data/snapshots/contacts.json";
 const COMPANIES_PATH = "./data/snapshots/companies.json";
+const VERSION_PATH = "./data/snapshots/version.json";
 
-// 👉 MUST BE SET
-const HUBSPOT_CONTACT_LIST_IDS = process.env.HUBSPOT_CONTACT_LIST_IDS?.split(",") || [];
-const HUBSPOT_COMPANY_LIST_IDS = process.env.HUBSPOT_COMPANY_LIST_IDS?.split(",") || [];
-
-// =========================
-// HELPERS
-// =========================
 function saveFile(path, data) {
   fs.writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
+function saveVersion(version) {
+  fs.writeFileSync(VERSION_PATH, JSON.stringify({ version }, null, 2));
+}
+
+function getVersion() {
+  if (!fs.existsSync(VERSION_PATH)) return null;
+  return JSON.parse(fs.readFileSync(VERSION_PATH)).version;
+}
+
 function extractDomain(email) {
   if (!email) return null;
-  return email.split("@")[1]?.toLowerCase() || null;
-}
-
-function chunkArray(arr, size = 100) {
-  const result = [];
-  for (let i = 0; i < arr.length; i += size) {
-    result.push(arr.slice(i, i + size));
-  }
-  return result;
+  return email.split("@")[1]?.toLowerCase();
 }
 
 // =========================
-// HUBSPOT HELPERS
+// FETCH CONTACTS
 // =========================
-async function fetchListMembers(listId, after = null) {
-  const url = new URL(`${HUBSPOT_BASE}/crm/v3/lists/${listId}/memberships`);
-
-  url.searchParams.append("limit", "100");
-  if (after) url.searchParams.append("after", after);
-
-  const res = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`
-    }
-  });
-
-  const data = await res.json();
-
-  if (!res.ok) {
-    console.error("❌ List fetch failed:", data);
-    throw new Error("List fetch failed");
-  }
-
-  return data;
-}
-
-// -------------------------
-// BATCH CONTACT FETCH
-// -------------------------
-async function fetchContactsByIds(ids) {
-  const batches = chunkArray(ids, 100);
+async function fetchAllContacts() {
   let results = [];
+  let after = null;
 
-  for (const batch of batches) {
-    const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
-      method: "POST",
+  do {
+    const url = new URL(`${HUBSPOT_BASE}/crm/v3/objects/contacts`);
+    url.searchParams.append("limit", "100");
+    if (after) url.searchParams.append("after", after);
+
+    const res = await fetch(url, {
+      method: "GET",
       headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        properties: [
-          "firstname",
-          "lastname",
-          "email",
-          "company",
-          "jobtitle",
-          "hs_email_bounce"
-        ],
-        inputs: batch.map(id => ({ id }))
-      })
+        Authorization: `Bearer ${TOKEN}`
+      }
     });
 
     const data = await res.json();
-
-    if (!res.ok) {
-      console.error("❌ Contact batch fetch failed:", data);
-      throw new Error("Contact batch fetch failed");
-    }
-
     results.push(...(data.results || []));
-  }
+    after = data.paging?.next?.after;
 
-  return results;
-}
-
-// -------------------------
-// BATCH COMPANY FETCH
-// -------------------------
-async function fetchCompaniesByIds(ids) {
-  const batches = chunkArray(ids, 100);
-  let results = [];
-
-  for (const batch of batches) {
-    const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/companies/batch/read`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        properties: [
-          "name",
-          "domain",
-          "n4f_email_patterns"
-        ],
-        inputs: batch.map(id => ({ id }))
-      })
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      console.error("❌ Company batch fetch failed:", data);
-      throw new Error("Company batch fetch failed");
-    }
-
-    results.push(...(data.results || []));
-  }
+  } while (after);
 
   return results;
 }
 
 // =========================
-// FETCH CONTACTS FROM LISTS
+// FETCH COMPANIES
 // =========================
-async function fetchContactsFromLists() {
-  let allIds = [];
+async function fetchAllCompanies() {
+  let results = [];
+  let after = null;
 
-  for (const listId of HUBSPOT_CONTACT_LIST_IDS) {
-    console.log(`📥 Fetching contacts from list ${listId}`);
+  do {
+    const url = new URL(`${HUBSPOT_BASE}/crm/v3/objects/companies`);
+    url.searchParams.append("limit", "100");
+    if (after) url.searchParams.append("after", after);
 
-    let after = null;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`
+      }
+    });
 
-    do {
-      const data = await fetchListMembers(listId, after);
-      const ids = data.results?.map(r => r.recordId) || [];
+    const data = await res.json();
+    results.push(...(data.results || []));
+    after = data.paging?.next?.after;
 
-      allIds.push(...ids);
-      after = data.paging?.next?.after || null;
+  } while (after);
 
-    } while (after);
-  }
-
-  const uniqueIds = [...new Set(allIds)];
-  console.log(`📊 Unique contact IDs: ${uniqueIds.length}`);
-
-  const contactsRaw = await fetchContactsByIds(uniqueIds);
-
-  return contactsRaw.map(c => ({
-    id: c.id,
-    first: c.properties.firstname || "",
-    last: c.properties.lastname || "",
-    email: c.properties.email || "",
-    company: c.properties.company || "",
-    title: c.properties.jobtitle || "",
-    bounce: c.properties.hs_email_bounce,
-    domain: extractDomain(c.properties.email)
-  }));
-}
-
-// =========================
-// FETCH COMPANIES FROM LISTS
-// =========================
-function parsePatterns(patternString) {
-  if (!patternString) return [];
-  return patternString.split(";").map(p => p.trim());
-}
-
-async function fetchCompaniesFromLists() {
-  let allIds = [];
-
-  for (const listId of HUBSPOT_COMPANY_LIST_IDS) {
-    console.log(`📥 Fetching companies from list ${listId}`);
-
-    let after = null;
-
-    do {
-      const data = await fetchListMembers(listId, after);
-      const ids = data.results?.map(r => r.recordId) || [];
-
-      allIds.push(...ids);
-      after = data.paging?.next?.after || null;
-
-    } while (after);
-  }
-
-  const uniqueIds = [...new Set(allIds)];
-  console.log(`📊 Unique company IDs: ${uniqueIds.length}`);
-
-  const companiesRaw = await fetchCompaniesByIds(uniqueIds);
-
-  return companiesRaw.map(c => ({
-    id: c.id,
-    name: c.properties.name || "",
-    domain: c.properties.domain || "",
-    patterns: parsePatterns(c.properties.n4f_email_patterns)
-  }));
+  return results;
 }
 
 // =========================
 // BUILD SNAPSHOT
 // =========================
 export async function buildSnapshot() {
-  console.log("🔄 Building snapshot (list-based)...");
+  console.log("🔄 Building snapshot...");
 
-  // CONTACTS
-  const contacts = await fetchContactsFromLists();
+  const contactsRaw = await fetchAllContacts();
+
+  const contacts = contactsRaw.map(c => ({
+    id: c.id,
+    first: c.properties.firstname,
+    last: c.properties.lastname,
+    email: c.properties.email,
+    company: c.properties.company,
+    domain: extractDomain(c.properties.email),
+    pd_language: c.properties.pd_language || null // ✅ NEW
+  }));
+
   saveFile(CONTACTS_PATH, contacts);
   console.log(`✅ Contacts snapshot: ${contacts.length}`);
 
-  // COMPANIES
-  const companies = await fetchCompaniesFromLists();
+  const companiesRaw = await fetchAllCompanies();
+
+  const companies = companiesRaw.map(c => ({
+    id: c.id,
+    name: c.properties.name,
+    domain: c.properties.domain,
+    patterns: c.properties.n4f_email_patterns
+      ? c.properties.n4f_email_patterns.split(";")
+      : []
+  }));
+
   saveFile(COMPANIES_PATH, companies);
   console.log(`✅ Companies snapshot: ${companies.length}`);
 
+  const version = new Date().toISOString();
+  saveVersion(version);
+
+  console.log(`🧾 Snapshot version: ${version}`);
+
   return {
     contacts: contacts.length,
-    companies: companies.length
+    companies: companies.length,
+    version
   };
 }
 
-// =========================
-// GET SNAPSHOT
-// =========================
 export function getContactsSnapshot() {
   return JSON.parse(fs.readFileSync(CONTACTS_PATH));
 }
 
 export function getCompaniesSnapshot() {
   return JSON.parse(fs.readFileSync(COMPANIES_PATH));
+}
+
+export function getSnapshotVersion() {
+  return getVersion();
+}
+
+
+// =========================
+// SnapshotContext.jsx (REFactored: SINGLE CALL + VERSION-AWARE + INDEXED)
+// =========================
+import { createContext, useContext, useEffect, useState, useMemo } from "react";
+
+const SnapshotContext = createContext();
+
+const API_BASE = "https://lead-sync-backend.osc-fr1.scalingo.io";
+
+const CACHE_KEY = "snapshot_full";
+const VERSION_KEY = "snapshot_version";
+
+export function SnapshotProvider({ children }) {
+  const [contacts, setContacts] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [version, setVersion] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadSnapshot() {
+      try {
+        // =========================
+        // 1. LOAD CACHE
+        // =========================
+        const cached = localStorage.getItem(CACHE_KEY);
+        const cachedVersion = localStorage.getItem(VERSION_KEY);
+
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setContacts(parsed.contacts || []);
+          setCompanies(parsed.companies || []);
+          setVersion(cachedVersion);
+
+          console.log("⚡ Snapshot loaded from cache");
+        }
+
+        // =========================
+        // 2. FETCH FROM BACKEND
+        // =========================
+        const res = await fetch(`${API_BASE}/snapshot/full`);
+
+        if (!res.ok) throw new Error("Snapshot fetch failed");
+
+        const data = await res.json();
+
+        const backendVersion = data.version;
+
+        // =========================
+        // 3. VERSION CHECK
+        // =========================
+        if (backendVersion === cachedVersion) {
+          console.log("⏭️ Snapshot up-to-date, skipping update");
+          setLoading(false);
+          return;
+        }
+
+        console.log("🔄 New snapshot version detected");
+
+        // =========================
+        // 4. UPDATE STATE
+        // =========================
+        setContacts(data.contacts || []);
+        setCompanies(data.companies || []);
+        setVersion(backendVersion);
+
+        // =========================
+        // 5. SAVE CACHE
+        // =========================
+        localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+        localStorage.setItem(VERSION_KEY, backendVersion);
+
+        console.log("✅ Snapshot updated from backend", {
+          contacts: data.contacts?.length,
+          companies: data.companies?.length,
+          version: backendVersion
+        });
+
+      } catch (err) {
+        console.error("❌ Snapshot load failed:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadSnapshot();
+  }, []);
+
+  // =========================
+  // INDEXES (PERFORMANCE)
+  // =========================
+
+  const emailMap = useMemo(() => {
+    const map = new Map();
+    contacts.forEach(c => {
+      if (c.email) map.set(c.email.toLowerCase(), c);
+    });
+    return map;
+  }, [contacts]);
+
+  const domainMap = useMemo(() => {
+    const map = {};
+    companies.forEach(c => {
+      if (c.domain) map[c.domain.toLowerCase()] = c;
+    });
+    return map;
+  }, [companies]);
+
+  const nameIndex = useMemo(() => {
+    const map = new Map();
+    contacts.forEach(c => {
+      const key = `${c.first || ""}_${c.last || ""}`.toLowerCase();
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(c);
+    });
+    return map;
+  }, [contacts]);
+
+  return (
+    <SnapshotContext.Provider
+      value={{
+        contacts,
+        companies,
+        version,
+        loading,
+        emailMap,
+        domainMap,
+        nameIndex
+      }}
+    >
+      {children}
+    </SnapshotContext.Provider>
+  );
+}
+
+export function useSnapshot() {
+  return useContext(SnapshotContext);
 }

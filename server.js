@@ -225,7 +225,7 @@ app.get("/admin/export/:event", (req, res) => {
 });
 
 // =========================
-// SYNC
+// SYNC (UPDATED)
 // =========================
 app.post("/sync/lead", async (req, res) => {
   try {
@@ -233,41 +233,52 @@ app.post("/sync/lead", async (req, res) => {
 
     const protocol = validateProtocol(payload.protocol);
 
+    // ✅ CONTACT (DEDUP)
     const contactId = await upsertContact(payload);
 
+    // ✅ MAP PROTOCOL
     const mapped = mapProtocolToHubSpot(protocol);
 
+    // ✅ TOUCHPOINT (CREATE OR UPDATE)
     const touchpointId = await createOrUpdateTouchpoint(
       mapped,
       contactId,
       payload
     );
 
+    const success = !!contactId && !!touchpointId;
+
+    // =========================
+    // STORE PROTOCOL
+    // =========================
     if (payload.protocolId) {
       saveProtocol({
         protocolId: payload.protocolId,
         contactId,
         touchpointId,
         payload,
-        status: "synced"
+        status: success ? "synced" : "partial"
       });
     }
 
-    res.json({ success: true, contactId, touchpointId });
+    // =========================
+    // RESPONSE (CRITICAL)
+    // =========================
+    res.json({
+      success,
+      contactId,
+      touchpointId
+    });
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
 });
-
-// =========================
-// HEALTH
-// =========================
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
-
 // =========================
 // START SERVER
 // =========================

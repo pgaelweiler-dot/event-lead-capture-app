@@ -1,5 +1,5 @@
 // =========================
-// services/protocolMapper.js (UPDATED WITH ID)
+// services/protocolMapper.js (FINAL FIXED VERSION)
 // =========================
 import { HARDCODED_TOUCHPOINT_FIELDS } from "./protocolConfig.js";
 
@@ -46,10 +46,31 @@ export function mapProtocolToHubSpot(protocol) {
     }
   }
 
-  // ✅ include protocol ID
+  // =========================
+  // 🔥 REQUIRED FIELD FIX
+  // =========================
+  const touchpointName =
+    protocol.event_name ||
+    properties.n4f_touchpoint_name_dd ||
+    "Event Touchpoint";
+
+  // REQUIRED by HubSpot
+  properties.download_name = touchpointName;
+
+  // keep your existing field aligned
+  properties.n4f_touchpoint_name_dd = touchpointName;
+
+  // =========================
+  // OPTIONAL: PROTOCOL ID
+  // =========================
   if (protocol.protocolId) {
     properties.n4f_protocol_id = protocol.protocolId;
   }
+
+  // =========================
+  // DEBUG LOG (TEMP - HIGHLY RECOMMENDED)
+  // =========================
+  console.log("🟢 Final HubSpot properties:", properties);
 
   return {
     ...HARDCODED_TOUCHPOINT_FIELDS,

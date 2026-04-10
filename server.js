@@ -1,5 +1,5 @@
 // =========================
-// server.js (FULL WORKING VERSION + SCHEDULER + VERSIONED SNAPSHOT)
+// server.js (FULL + INCREMENTAL SNAPSHOT SUPPORT)
 // =========================
 import express from "express";
 import cors from "cors";
@@ -14,12 +14,12 @@ import { saveProtocol, getEventProtocols } from "./services/protocolStore.js";
 
 import {
   buildSnapshot,
+  updateSnapshot,
   getContactsSnapshot,
   getCompaniesSnapshot,
   getSnapshotVersion
 } from "./services/snapshotService.js";
 
-// ✅ Scheduler
 import { startScheduler } from "./services/scheduler.js";
 
 dotenv.config();
@@ -45,6 +45,7 @@ async function upsertContact(payload) {
 
   properties.n4f_contact_source_level_1 = "Marketing event";
   properties.n4f_contact_source_level_3 = "Booth Contacts";
+
   if (payload.meta?.event) {
     properties.n4f_lead_source_level_2_dd = payload.meta.event;
   }
@@ -106,7 +107,7 @@ async function upsertContact(payload) {
 }
 
 // =========================
-// SNAPSHOT BUILD
+// SNAPSHOT BUILD (FULL)
 // =========================
 app.post("/admin/snapshot/build", async (req, res) => {
   try {
@@ -119,28 +120,76 @@ app.post("/admin/snapshot/build", async (req, res) => {
 });
 
 // =========================
-// SNAPSHOT ENDPOINTS (VERSIONED)
+// SNAPSHOT UPDATE (INCREMENTAL)
+// =========================
+app.post("/admin/snapshot/update", async (req, res) => {
+  try {
+    const result = await updateSnapshot();
+    res.json(result);
+  } catch (err) {
+    console.error("❌ Snapshot update failed", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =========================
+// SNAPSHOT ENDPOINTS
 // =========================
 app.get("/snapshot/contacts", (req, res) => {
+  const data = getContactsSnapshot();
+  const version = getSnapshotVersion();
+
+  if (!data || !version) {
+    return res.status(500).json({ error: "Snapshot corrupted" });
+  }
+
   res.json({
-    version: getSnapshotVersion(),
-    data: getContactsSnapshot()
+    version,
+    data
   });
 });
 
 app.get("/snapshot/companies", (req, res) => {
+  const data = getCompaniesSnapshot();
+  const version = getSnapshotVersion();
+
+  if (!data || !version) {
+    return res.status(500).json({ error: "Snapshot corrupted" });
+  }
+
   res.json({
-    version: getSnapshotVersion(),
-    data: getCompaniesSnapshot()
+    version,
+    data
   });
 });
 
-// ✅ SINGLE CALL (USED BY FRONTEND)
+// =========================
+// SNAPSHOT FULL (USED BY FRONTEND)
+// =========================
 app.get("/snapshot/full", (req, res) => {
+  const contacts = getContactsSnapshot();
+  const companies = getCompaniesSnapshot();
+  const version = getSnapshotVersion();
+
+  if (!contacts || !companies || !version) {
+    return res.status(500).json({
+      error: "Snapshot corrupted. Rebuild required."
+    });
+  }
+
   res.json({
-    version: getSnapshotVersion(),
-    contacts: getContactsSnapshot(),
-    companies: getCompaniesSnapshot()
+    version,
+    contacts,
+    companies
+  });
+});
+
+// =========================
+// SNAPSHOT VERSION ONLY (OPTIMIZATION)
+// =========================
+app.get("/snapshot/version", (req, res) => {
+  res.json({
+    version: getSnapshotVersion()
   });
 });
 
@@ -227,6 +276,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on", PORT);
 
-  // ✅ Start scheduler after boot
+  // start scheduler
   startScheduler();
 });

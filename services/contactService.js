@@ -1,3 +1,6 @@
+// =========================
+// contactService.js (UPDATED - DEDUP SAFE)
+// =========================
 import fetch from "node-fetch";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
@@ -12,8 +15,48 @@ export async function upsertContact(payload) {
   if (payload.extracted?.company) properties.company = payload.extracted.company;
   if (payload.extracted?.jobTitle) properties.jobtitle = payload.extracted.jobTitle;
 
-  let contactId = payload.hubspotId;
+  properties.n4f_contact_source_level_1 = "Marketing event";
+  properties.n4f_contact_source_level_3 = "Booth Contacts";
 
+  if (payload.meta?.event) {
+    properties.n4f_lead_source_level_2_dd = payload.meta.event;
+  }
+
+  let contactId = payload.hubspot?.contactId;
+
+  // =========================
+  // EMAIL DEDUP (CRITICAL)
+  // =========================
+  if (!contactId && properties.email) {
+    const searchRes = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/search`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        filterGroups: [{
+          filters: [{
+            propertyName: "email",
+            operator: "EQ",
+            value: properties.email
+          }]
+        }],
+        limit: 1
+      })
+    });
+
+    const data = await searchRes.json();
+
+    if (data.results?.length > 0) {
+      contactId = data.results[0].id;
+      console.log("🔁 Found existing contact:", contactId);
+    }
+  }
+
+  // =========================
+  // UPDATE EXISTING
+  // =========================
   if (contactId) {
     await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/${contactId}`, {
       method: "PATCH",
@@ -24,33 +67,24 @@ export async function upsertContact(payload) {
       body: JSON.stringify({ properties })
     });
 
-  } else {
-    const createProperties = {
-      ...properties,
-      n4f_contact_source_level_1: "Marketing event",
-      n4f_contact_source_level_3: "Booth Contacts",
-      n4f_lead_source_level_2_dd: payload.protocol?.event_name || undefined
-    };
-
-    const resCreate = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ properties: createProperties })
-    });
-
-    const data = await resCreate.json();
-
-    console.log("🟢 Contact create response:", data);
-
-    if (!resCreate.ok) {
-      console.warn("⚠️ Contact creation failed:", data);
-    }
-
-    contactId = data.id;
+    return contactId;
   }
 
-  return contactId;
+  // =========================
+  // CREATE NEW
+  // =========================
+  const resCreate = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ properties })
+  });
+
+  const createData = await resCreate.json();
+
+  console.log("🟢 Contact create response:", createData);
+
+  return createData.id;
 }

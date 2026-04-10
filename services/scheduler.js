@@ -2,7 +2,7 @@
 // scheduler.js
 // =========================
 import cron from "node-cron";
-import { buildSnapshot } from "./services/snapshotService.js";
+import { buildSnapshot } from "./snapshotService.js";
 
 let isRunning = false;
 

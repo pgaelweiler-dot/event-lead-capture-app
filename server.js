@@ -1,5 +1,5 @@
 // =========================
-// server.js (FULL WORKING VERSION + SCHEDULER)
+// server.js (FULL WORKING VERSION + SCHEDULER + VERSIONED SNAPSHOT)
 // =========================
 import express from "express";
 import cors from "cors";
@@ -15,10 +15,11 @@ import { saveProtocol, getEventProtocols } from "./services/protocolStore.js";
 import {
   buildSnapshot,
   getContactsSnapshot,
-  getCompaniesSnapshot
+  getCompaniesSnapshot,
+  getSnapshotVersion
 } from "./services/snapshotService.js";
 
-// ✅ NEW: Scheduler
+// ✅ Scheduler
 import { startScheduler } from "./scheduler.js";
 
 dotenv.config();
@@ -105,23 +106,42 @@ async function upsertContact(payload) {
 }
 
 // =========================
-// SNAPSHOT
+// SNAPSHOT BUILD
 // =========================
 app.post("/admin/snapshot/build", async (req, res) => {
   try {
     const result = await buildSnapshot();
     res.json(result);
   } catch (err) {
+    console.error("❌ Snapshot build failed", err);
     res.status(500).json({ error: err.message });
   }
 });
 
+// =========================
+// SNAPSHOT ENDPOINTS (VERSIONED)
+// =========================
 app.get("/snapshot/contacts", (req, res) => {
-  res.json(getContactsSnapshot());
+  res.json({
+    version: getSnapshotVersion(),
+    data: getContactsSnapshot()
+  });
 });
 
 app.get("/snapshot/companies", (req, res) => {
-  res.json(getCompaniesSnapshot());
+  res.json({
+    version: getSnapshotVersion(),
+    data: getCompaniesSnapshot()
+  });
+});
+
+// ✅ SINGLE CALL (USED BY FRONTEND)
+app.get("/snapshot/full", (req, res) => {
+  res.json({
+    version: getSnapshotVersion(),
+    contacts: getContactsSnapshot(),
+    companies: getCompaniesSnapshot()
+  });
 });
 
 // =========================
@@ -150,6 +170,7 @@ app.get("/admin/export/:event", (req, res) => {
     res.send(buffer);
 
   } catch (err) {
+    console.error("❌ Export failed", err);
     res.status(500).json({ error: err.message });
   }
 });

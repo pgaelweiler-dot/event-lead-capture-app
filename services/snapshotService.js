@@ -1,5 +1,5 @@
 // =========================
-// snapshotService.js (FULL + INCREMENTAL)
+// snapshotService.js (FULL SAFE VERSION)
 // =========================
 import fs from "fs";
 import fetch from "node-fetch";
@@ -7,8 +7,14 @@ import fetch from "node-fetch";
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const TOKEN = process.env.Private_App_Token;
 
-const CONTACT_LIST_IDS = process.env.HUBSPOT_CONTACT_LIST_IDS.split(",");
-const COMPANY_LIST_IDS = process.env.HUBSPOT_COMPANY_LIST_IDS.split(",");
+// ✅ SAFE ENV HANDLING
+const CONTACT_LIST_IDS = (process.env.HUBSPOT_CONTACT_LIST_IDS || "")
+  .split(",")
+  .filter(Boolean);
+
+const COMPANY_LIST_IDS = (process.env.HUBSPOT_COMPANY_LIST_IDS || "")
+  .split(",")
+  .filter(Boolean);
 
 const CONTACTS_PATH = "./data/snapshots/contacts.json";
 const COMPANIES_PATH = "./data/snapshots/companies.json";
@@ -52,10 +58,6 @@ function extractDomain(email) {
   return email?.split("@")[1]?.toLowerCase() || null;
 }
 
-function getVersionData() {
-  return readJsonSafe(VERSION_PATH) || null;
-}
-
 // =========================
 // HUBSPOT HELPERS
 // =========================
@@ -72,6 +74,8 @@ async function fetchListMembers(listId, after = null) {
 }
 
 async function fetchContactsByIds(ids) {
+  if (!ids || ids.length === 0) return { results: [] };
+
   const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
     method: "POST",
     headers: {
@@ -92,10 +96,18 @@ async function fetchContactsByIds(ids) {
     })
   });
 
-  return res.json();
+  const data = await res.json();
+
+  if (!data.results) {
+    console.error("❌ CONTACT FETCH FAILED:", data);
+  }
+
+  return data;
 }
 
 async function fetchCompaniesByIds(ids) {
+  if (!ids || ids.length === 0) return { results: [] };
+
   const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/companies/batch/read`, {
     method: "POST",
     headers: {
@@ -113,11 +125,17 @@ async function fetchCompaniesByIds(ids) {
     })
   });
 
-  return res.json();
+  const data = await res.json();
+
+  if (!data.results) {
+    console.error("❌ COMPANY FETCH FAILED:", data);
+  }
+
+  return data;
 }
 
 // =========================
-// FULL BUILD (unchanged logic, but safe)
+// FULL BUILD (SAFE)
 // =========================
 export async function buildSnapshot() {
   if (!acquireLock()) throw new Error("Snapshot build already running");
@@ -125,7 +143,12 @@ export async function buildSnapshot() {
   try {
     console.log("🔄 Full snapshot build...");
 
+    if (!CONTACT_LIST_IDS.length) {
+      throw new Error("No CONTACT_LIST_IDS configured");
+    }
+
     let contactIds = [];
+
     for (const listId of CONTACT_LIST_IDS) {
       let after = null;
       do {
@@ -136,9 +159,12 @@ export async function buildSnapshot() {
     }
 
     const uniqueContactIds = [...new Set(contactIds)];
+
+    console.log(`📊 Found ${uniqueContactIds.length} contacts`);
+
     const contactBatch = await fetchContactsByIds(uniqueContactIds);
 
-    const contacts = contactBatch.results.map(c => ({
+    const contacts = (contactBatch.results || []).map(c => ({
       id: c.id,
       first: c.properties.firstname || "",
       last: c.properties.lastname || "",
@@ -150,6 +176,7 @@ export async function buildSnapshot() {
     }));
 
     let companyIds = [];
+
     for (const listId of COMPANY_LIST_IDS) {
       let after = null;
       do {
@@ -160,9 +187,12 @@ export async function buildSnapshot() {
     }
 
     const uniqueCompanyIds = [...new Set(companyIds)];
+
+    console.log(`📊 Found ${uniqueCompanyIds.length} companies`);
+
     const companyBatch = await fetchCompaniesByIds(uniqueCompanyIds);
 
-    const companies = companyBatch.results.map(c => ({
+    const companies = (companyBatch.results || []).map(c => ({
       id: c.id,
       name: c.properties.name,
       domain: c.properties.domain,
@@ -177,157 +207,14 @@ export async function buildSnapshot() {
     writeJsonAtomic(COMPANIES_PATH, companies);
     writeJsonAtomic(VERSION_PATH, { version, lastSync: version });
 
-    return { contacts: contacts.length, companies: companies.length, version };
-
-  } finally {
-    releaseLock();
-  }
-}
-
-// =========================
-// INCREMENTAL UPDATE
-// =========================
-export async function updateSnapshot() {
-  if (!acquireLock()) throw new Error("Snapshot update already running");
-
-  try {
-    console.log("🔄 Incremental snapshot update...");
-
-    const existingContacts = readJsonSafe(CONTACTS_PATH) || [];
-    const existingCompanies = readJsonSafe(COMPANIES_PATH) || [];
-    const versionData = getVersionData();
-
-    if (!versionData) {
-      console.log("⚠️ No snapshot found → running full build");
-      return buildSnapshot();
-    }
-
-    const lastSync = versionData.lastSync;
-
-    const contactMap = new Map(existingContacts.map(c => [c.id, c]));
-    const companyMap = new Map(existingCompanies.map(c => [c.id, c]));
-
-    // =========================
-    // LIST MEMBERSHIP
-    // =========================
-    let currentContactIds = [];
-    for (const listId of CONTACT_LIST_IDS) {
-      let after = null;
-      do {
-        const data = await fetchListMembers(listId, after);
-        currentContactIds.push(...(data.results?.map(r => r.recordId) || []));
-        after = data.paging?.next?.after || null;
-      } while (after);
-    }
-
-    currentContactIds = [...new Set(currentContactIds)];
-    const currentSet = new Set(currentContactIds);
-
-    // =========================
-    // REMOVE deleted
-    // =========================
-    for (const id of contactMap.keys()) {
-      if (!currentSet.has(id)) {
-        contactMap.delete(id);
-      }
-    }
-
-    // =========================
-    // FETCH UPDATED / NEW
-    // =========================
-    const CHUNK_SIZE = 100;
-
-    for (let i = 0; i < currentContactIds.length; i += CHUNK_SIZE) {
-      const chunk = currentContactIds.slice(i, i + CHUNK_SIZE);
-      const batch = await fetchContactsByIds(chunk);
-
-      batch.results.forEach(c => {
-        const modified = c.properties.hs_lastmodifieddate;
-
-        if (!lastSync || modified > lastSync || !contactMap.has(c.id)) {
-          contactMap.set(c.id, {
-            id: c.id,
-            first: c.properties.firstname || "",
-            last: c.properties.lastname || "",
-            email: c.properties.email || "",
-            company: c.properties.company || "",
-            title: c.properties.jobtitle || "",
-            pd_language: c.properties.pd_language || null,
-            domain: extractDomain(c.properties.email)
-          });
-        }
-      });
-    }
-
-    // =========================
-    // COMPANIES (same logic)
-    // =========================
-    let currentCompanyIds = [];
-    for (const listId of COMPANY_LIST_IDS) {
-      let after = null;
-      do {
-        const data = await fetchListMembers(listId, after);
-        currentCompanyIds.push(...(data.results?.map(r => r.recordId) || []));
-        after = data.paging?.next?.after || null;
-      } while (after);
-    }
-
-    currentCompanyIds = [...new Set(currentCompanyIds)];
-    const companySet = new Set(currentCompanyIds);
-
-    for (const id of companyMap.keys()) {
-      if (!companySet.has(id)) companyMap.delete(id);
-    }
-
-    for (let i = 0; i < currentCompanyIds.length; i += CHUNK_SIZE) {
-      const chunk = currentCompanyIds.slice(i, i + CHUNK_SIZE);
-      const batch = await fetchCompaniesByIds(chunk);
-
-      batch.results.forEach(c => {
-        const modified = c.properties.hs_lastmodifieddate;
-
-        if (!lastSync || modified > lastSync || !companyMap.has(c.id)) {
-          companyMap.set(c.id, {
-            id: c.id,
-            name: c.properties.name,
-            domain: c.properties.domain,
-            patterns: c.properties.n4f_email_patterns
-              ? c.properties.n4f_email_patterns.split(";")
-              : []
-          });
-        }
-      });
-    }
-
-    const contacts = Array.from(contactMap.values());
-    const companies = Array.from(companyMap.values());
-
-    const version = new Date().toISOString();
-
-    writeJsonAtomic(CONTACTS_PATH, contacts);
-    writeJsonAtomic(COMPANIES_PATH, companies);
-    writeJsonAtomic(VERSION_PATH, { version, lastSync: version });
-
-    console.log("✅ Incremental update complete");
+    console.log("✅ Snapshot build complete");
 
     return { contacts: contacts.length, companies: companies.length, version };
 
+  } catch (err) {
+    console.error("❌ Snapshot build failed:", err.message);
+    throw err;
   } finally {
     releaseLock();
   }
-}
-
-// =========================
-// EXPORTS
-// =========================
-export function getContactsSnapshot() {
-  return readJsonSafe(CONTACTS_PATH);
-}
-
-export function getCompaniesSnapshot() {
-  return readJsonSafe(COMPANIES_PATH);
-}
-
-export function getSnapshotVersion() {
-  return getVersionData()?.version || null;
 }

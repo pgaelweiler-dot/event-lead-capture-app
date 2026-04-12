@@ -1,16 +1,17 @@
 // =========================
-// scheduler.js (SAFE VERSION)
+// scheduler.js (PRODUCTION)
 // =========================
 import cron from "node-cron";
-import { buildSnapshot } from "./snapshotService.js";
+import { updateSnapshot } from "./snapshotService.js";
 
 let isRunning = false;
 
 export function startScheduler() {
   console.log("🕒 Scheduler initialized");
 
+  // ✅ RUN EVERY HOUR
   cron.schedule(
-    "0 0 * * 5",
+    "0 * * * *",
     async () => {
       if (isRunning) {
         console.log("⚠️ Snapshot already running, skipping...");
@@ -18,13 +19,14 @@ export function startScheduler() {
       }
 
       isRunning = true;
-      console.log("⏰ Running scheduled snapshot build...");
+
+      console.log("🔄 Scheduled incremental snapshot update...");
 
       try {
-        const result = await buildSnapshot();
-        console.log("✅ Scheduled snapshot complete:", result);
+        const result = await updateSnapshot();
+        console.log("✅ Snapshot updated:", result);
       } catch (err) {
-        console.error("❌ Scheduled snapshot failed:", err.message);
+        console.error("❌ Snapshot update failed:", err.message);
       } finally {
         isRunning = false;
       }

@@ -1,17 +1,24 @@
 // =========================
-// snapshotService.js (FINAL HYBRID + INCREMENTAL)
+// snapshotService.js (FINAL PRODUCTION)
 // =========================
 import fs from "fs";
 import fetch from "node-fetch";
 
+import {
+  validateContacts,
+  validateCompanies
+} from "./snapshotValidator.js";
+
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const TOKEN = process.env.Private_App_Token;
+
+const CONTACT_LIST_IDS = (process.env.HUBSPOT_CONTACT_LIST_IDS || "").split(",").filter(Boolean);
+const COMPANY_LIST_IDS = (process.env.HUBSPOT_COMPANY_LIST_IDS || "").split(",").filter(Boolean);
 
 const CONTACTS_PATH = "./data/snapshots/contacts.json";
 const COMPANIES_PATH = "./data/snapshots/companies.json";
 const VERSION_PATH = "./data/snapshots/version.json";
-
-const GITHUB_BASE = process.env.SNAPSHOT_GITHUB_BASE;
+const PROGRESS_PATH = "./data/snapshots/buildprogress.json";
 
 // =========================
 // FILE HELPERS
@@ -31,202 +38,272 @@ function writeJsonAtomic(path, data) {
 }
 
 // =========================
-// GITHUB FALLBACK
+// PROGRESS HANDLING
 // =========================
-async function fetchFromGitHub(file) {
-  if (!GITHUB_BASE) return null;
+function saveProgress(data) {
+  fs.writeFileSync(PROGRESS_PATH, JSON.stringify(data, null, 2));
+}
 
+function loadProgress() {
   try {
-    const res = await fetch(`${GITHUB_BASE}/${file}`);
-    if (!res.ok) return null;
-    return await res.json();
+    return JSON.parse(fs.readFileSync(PROGRESS_PATH, "utf-8"));
   } catch {
     return null;
   }
 }
 
-async function getSnapshotOrFallback(path, file) {
-  const local = readJsonSafe(path);
+function clearProgress() {
+  if (fs.existsSync(PROGRESS_PATH)) {
+    fs.unlinkSync(PROGRESS_PATH);
+  }
+}
 
-  if (local && local.length) return local;
+// =========================
+// FETCH LIST MEMBERS (RESUMABLE)
+// =========================
+async function fetchListMembersResumable(listIds, type) {
+  let progress = loadProgress();
 
-  console.log("⚠️ Loading snapshot from GitHub:", file);
+  let allIds = [];
+  let startListIndex = 0;
+  let after = null;
 
-  const remote = await fetchFromGitHub(file);
-
-  if (remote) {
-    writeJsonAtomic(path, remote);
-    return remote;
+  if (progress && progress.type === type) {
+    console.log("♻️ Resuming", type);
+    startListIndex = progress.listIndex;
+    after = progress.after;
+    allIds = progress.collectedIds || [];
   }
 
-  return [];
-}
+  for (let i = startListIndex; i < listIds.length; i++) {
+    const listId = listIds[i];
 
-// =========================
-// PUBLIC GETTERS
-// =========================
-export async function getContactsSnapshot() {
-  return await getSnapshotOrFallback(CONTACTS_PATH, "contacts.json");
-}
+    do {
+      const url = new URL(`${HUBSPOT_BASE}/crm/v3/lists/${listId}/memberships`);
+      url.searchParams.append("limit", "100");
+      if (after) url.searchParams.append("after", after);
 
-export async function getCompaniesSnapshot() {
-  return await getSnapshotOrFallback(COMPANIES_PATH, "companies.json");
-}
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${TOKEN}` }
+      });
 
-export async function getSnapshotVersion() {
-  const local = readJsonSafe(VERSION_PATH);
-  if (local) return local.version;
+      const data = await res.json();
 
-  const remote = await fetchFromGitHub("version.json");
-  return remote?.version || null;
-}
+      const newIds = data.results?.map(r => r.recordId) || [];
+      allIds.push(...newIds);
 
-// =========================
-// FULL BUILD (FALLBACK)
-// =========================
-export async function buildSnapshot() {
-  console.log("🔄 FULL snapshot rebuild");
+      after = data.paging?.next?.after || null;
 
-  const contacts = await fetchUpdatedContacts("1970-01-01");
-  const companies = await fetchUpdatedCompanies("1970-01-01");
+      saveProgress({
+        type,
+        listIndex: i,
+        after,
+        collectedIds: allIds
+      });
 
-  const version = new Date().toISOString();
+    } while (after);
 
-  writeJsonAtomic(CONTACTS_PATH, contacts);
-  writeJsonAtomic(COMPANIES_PATH, companies);
-  writeJsonAtomic(VERSION_PATH, {
-    version,
-    lastSync: version
-  });
-
-  return { contacts: contacts.length, companies: companies.length, version };
-}
-
-// =========================
-// INCREMENTAL UPDATE
-// =========================
-export async function updateSnapshot() {
-  console.log("🔄 Incremental snapshot update");
-
-  const lastSync = readJsonSafe(VERSION_PATH)?.lastSync;
-
-  if (!lastSync) {
-    console.log("⚠️ No baseline → full rebuild");
-    return await buildSnapshot();
+    after = null;
   }
 
-  const updatedContacts = await fetchUpdatedContacts(lastSync);
-  const updatedCompanies = await fetchUpdatedCompanies(lastSync);
+  clearProgress();
 
-  const existingContacts = readJsonSafe(CONTACTS_PATH) || [];
-  const existingCompanies = readJsonSafe(COMPANIES_PATH) || [];
+  return [...new Set(allIds)];
+}
 
-  const mergedContacts = mergeById(existingContacts, updatedContacts);
-  const mergedCompanies = mergeById(existingCompanies, updatedCompanies);
+// =========================
+// CHUNKED BATCH READ
+// =========================
+async function batchReadChunked(object, ids, properties, mapFn, path) {
+  let results = [];
 
-  const version = new Date().toISOString();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
 
-  writeJsonAtomic(CONTACTS_PATH, mergedContacts);
-  writeJsonAtomic(COMPANIES_PATH, mergedCompanies);
-  writeJsonAtomic(VERSION_PATH, {
-    version,
-    lastSync: version
-  });
+    console.log(`📦 ${object} chunk ${i} → ${i + chunk.length}`);
 
+    const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${object}/batch/read`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        properties,
+        inputs: chunk.map(id => ({ id }))
+      })
+    });
+
+    const data = await res.json();
+    results.push(...(data.results || []));
+
+    // partial write
+    const mapped = results.map(mapFn);
+
+    if (object === "contacts") {
+      writeJsonAtomic(path, validateContacts(mapped));
+    } else {
+      writeJsonAtomic(path, validateCompanies(mapped));
+    }
+  }
+
+  return results;
+}
+
+// =========================
+// MAPPING
+// =========================
+function mapContact(c) {
   return {
-    contacts: mergedContacts.length,
-    companies: mergedCompanies.length,
-    version
-  };
-}
-
-// =========================
-// MERGE
-// =========================
-function mergeById(existing, updates) {
-  const map = new Map(existing.map(e => [e.id, e]));
-
-  for (const u of updates) {
-    map.set(u.id, u);
-  }
-
-  return Array.from(map.values());
-}
-
-// =========================
-// FETCH UPDATED CONTACTS
-// =========================
-async function fetchUpdatedContacts(since) {
-  const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/search`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      filterGroups: [{
-        filters: [{
-          propertyName: "hs_lastmodifieddate",
-          operator: "GTE",
-          value: since
-        }]
-      }],
-      properties: [
-        "firstname",
-        "lastname",
-        "email",
-        "company",
-        "jobtitle",
-        "pd_language"
-      ],
-      limit: 100
-    })
-  });
-
-  const data = await res.json();
-
-  return (data.results || []).map(c => ({
     id: c.id,
     first: c.properties.firstname || "",
     last: c.properties.lastname || "",
     email: c.properties.email || "",
     company: c.properties.company || "",
     title: c.properties.jobtitle || "",
-    pd_language: c.properties.pd_language || null
-  }));
+    phone: c.properties.phone || "",
+    pd_language: c.properties.pd_language || null,
+    lastModified: c.properties.hs_lastmodifieddate || null
+  };
+}
+
+function mapCompany(c) {
+  return {
+    id: c.id,
+    name: c.properties.name || "",
+    domain: c.properties.domain || "",
+    additionalDomains: c.properties.hs_additional_domains || "",
+    patterns: c.properties.n4f_email_patterns
+      ? c.properties.n4f_email_patterns.split(";")
+      : [],
+    lastModified: c.properties.hs_lastmodifieddate || null
+  };
 }
 
 // =========================
-// FETCH UPDATED COMPANIES
+// FULL BUILD
 // =========================
-async function fetchUpdatedCompanies(since) {
-  const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/companies/search`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      filterGroups: [{
-        filters: [{
-          propertyName: "hs_lastmodifieddate",
-          operator: "GTE",
-          value: since
-        }]
-      }],
-      properties: ["name", "domain", "n4f_email_patterns"],
-      limit: 100
-    })
+export async function buildSnapshot() {
+  console.log("🔄 FULL SNAPSHOT BUILD");
+
+  const contactIds = await fetchListMembersResumable(CONTACT_LIST_IDS, "contacts");
+  const companyIds = await fetchListMembersResumable(COMPANY_LIST_IDS, "companies");
+
+  const contactsRaw = await batchReadChunked(
+    "contacts",
+    contactIds,
+    [
+      "firstname","lastname","email","company","jobtitle",
+      "phone","pd_language","hs_lastmodifieddate"
+    ],
+    mapContact,
+    CONTACTS_PATH
+  );
+
+  const companiesRaw = await batchReadChunked(
+    "companies",
+    companyIds,
+    [
+      "name","domain","hs_additional_domains",
+      "n4f_email_patterns","hs_lastmodifieddate"
+    ],
+    mapCompany,
+    COMPANIES_PATH
+  );
+
+  const contacts = validateContacts(contactsRaw.map(mapContact));
+  const companies = validateCompanies(companiesRaw.map(mapCompany));
+
+  const now = new Date().toISOString();
+
+  writeJsonAtomic(CONTACTS_PATH, contacts);
+  writeJsonAtomic(COMPANIES_PATH, companies);
+  writeJsonAtomic(VERSION_PATH, {
+    version: now,
+    lastSync: now
   });
 
-  const data = await res.json();
+  return {
+    contacts: contacts.length,
+    companies: companies.length,
+    version: now
+  };
+}
 
-  return (data.results || []).map(c => ({
-    id: c.id,
-    name: c.properties.name,
-    domain: c.properties.domain,
-    patterns: c.properties.n4f_email_patterns
-      ? c.properties.n4f_email_patterns.split(";")
-      : []
-  }));
+// =========================
+// UPDATE (SMART MERGE)
+// =========================
+export async function updateSnapshot() {
+  console.log("🔄 INCREMENTAL UPDATE");
+
+  const version = readJsonSafe(VERSION_PATH);
+  if (!version?.lastSync) {
+    return await buildSnapshot();
+  }
+
+  const existingContacts = readJsonSafe(CONTACTS_PATH) || [];
+  const existingCompanies = readJsonSafe(COMPANIES_PATH) || [];
+
+  const contactMap = new Map(existingContacts.map(c => [c.id, c]));
+  const companyMap = new Map(existingCompanies.map(c => [c.id, c]));
+
+  const contactIds = await fetchListMembersResumable(CONTACT_LIST_IDS, "contacts");
+  const companyIds = await fetchListMembersResumable(COMPANY_LIST_IDS, "companies");
+
+  const contactsRaw = await batchReadChunked(
+    "contacts",
+    contactIds,
+    [
+      "firstname","lastname","email","company","jobtitle",
+      "phone","pd_language","hs_lastmodifieddate"
+    ],
+    mapContact,
+    CONTACTS_PATH
+  );
+
+  const companiesRaw = await batchReadChunked(
+    "companies",
+    companyIds,
+    [
+      "name","domain","hs_additional_domains",
+      "n4f_email_patterns","hs_lastmodifieddate"
+    ],
+    mapCompany,
+    COMPANIES_PATH
+  );
+
+  const updatedContacts = validateContacts(contactsRaw.map(mapContact));
+  const updatedCompanies = validateCompanies(companiesRaw.map(mapCompany));
+
+  for (const c of updatedContacts) contactMap.set(c.id, c);
+  for (const c of updatedCompanies) companyMap.set(c.id, c);
+
+  const now = new Date().toISOString();
+
+  writeJsonAtomic(CONTACTS_PATH, Array.from(contactMap.values()));
+  writeJsonAtomic(COMPANIES_PATH, Array.from(companyMap.values()));
+  writeJsonAtomic(VERSION_PATH, {
+    version: now,
+    lastSync: now
+  });
+
+  return {
+    contacts: contactMap.size,
+    companies: companyMap.size
+  };
+}
+
+// =========================
+// GETTERS
+// =========================
+export function getContactsSnapshot() {
+  return readJsonSafe(CONTACTS_PATH) || [];
+}
+
+export function getCompaniesSnapshot() {
+  return readJsonSafe(COMPANIES_PATH) || [];
+}
+
+export function getSnapshotVersion() {
+  return readJsonSafe(VERSION_PATH)?.version || null;
 }

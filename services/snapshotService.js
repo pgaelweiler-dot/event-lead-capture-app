@@ -218,3 +218,31 @@ export async function buildSnapshot() {
     releaseLock();
   }
 }
+// =========================
+// SNAPSHOT READ HELPERS (REQUIRED BY SERVER)
+// =========================
+
+export function getContactsSnapshot() {
+  try {
+    return JSON.parse(fs.readFileSync(CONTACTS_PATH, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+export function getCompaniesSnapshot() {
+  try {
+    return JSON.parse(fs.readFileSync(COMPANIES_PATH, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+export function getSnapshotVersion() {
+  try {
+    const data = JSON.parse(fs.readFileSync(VERSION_PATH, "utf-8"));
+    return data.version;
+  } catch {
+    return null;
+  }
+}

@@ -1,5 +1,5 @@
 // =========================
-// scheduler.js
+// scheduler.js (SAFE VERSION)
 // =========================
 import cron from "node-cron";
 import { buildSnapshot } from "./snapshotService.js";
@@ -10,7 +10,7 @@ export function startScheduler() {
   console.log("🕒 Scheduler initialized");
 
   cron.schedule(
-    "0 0 * * 5", // every Friday at 00:00
+    "0 0 * * 5",
     async () => {
       if (isRunning) {
         console.log("⚠️ Snapshot already running, skipping...");

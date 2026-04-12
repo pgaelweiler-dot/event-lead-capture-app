@@ -1,14 +1,11 @@
 // =========================
-// services/protocolStore.js (EVENT-BASED STORAGE + ARCHIVE)
+// protocolStore.js (FINAL)
 // =========================
 import fs from "fs";
 
 const BASE_PATH = "./data/protocols";
 const ARCHIVE_PATH = "./data/archive";
 
-// =========================
-// HELPERS
-// =========================
 function ensureDir(path) {
   if (!fs.existsSync(path)) {
     fs.mkdirSync(path, { recursive: true });
@@ -22,8 +19,7 @@ function getFilePath(event) {
 
 function readFile(path) {
   try {
-    const raw = fs.readFileSync(path);
-    return JSON.parse(raw);
+    return JSON.parse(fs.readFileSync(path));
   } catch {
     return null;
   }
@@ -38,7 +34,12 @@ function writeFile(path, data) {
 // =========================
 export function saveProtocol(record) {
   if (!record?.payload?.meta?.event) {
-    console.warn("⚠️ Missing event in payload → skipping storage");
+    console.warn("⚠️ Missing event → skipping");
+    return;
+  }
+
+  if (!record?.contactId) {
+    console.warn("⚠️ Missing contactId → protocol invalid");
     return;
   }
 
@@ -61,20 +62,37 @@ export function saveProtocol(record) {
     r => r.protocolId === record.protocolId
   );
 
+  const now = new Date().toISOString();
+
+  const enrichedRecord = {
+    ...record,
+
+    // ✅ enforce relationship
+    contactId: record.contactId,
+    touchpointId: record.touchpointId || null,
+
+    // ✅ timestamps
+    createdAt: record.createdAt || now,
+    updatedAt: now,
+
+    // ✅ store full extracted contact snapshot
+    contact: record.payload?.extracted || {}
+  };
+
   if (index >= 0) {
     fileData.records[index] = {
       ...fileData.records[index],
-      ...record
+      ...enrichedRecord
     };
   } else {
-    fileData.records.push(record);
+    fileData.records.push(enrichedRecord);
   }
 
   writeFile(filePath, fileData);
 }
 
 // =========================
-// ARCHIVE EVENT
+// ARCHIVE
 // =========================
 export function archiveEvent(event) {
   ensureDir(BASE_PATH);
@@ -97,53 +115,9 @@ export function archiveEvent(event) {
 }
 
 // =========================
-// OPTIONAL: GET EVENT DATA
+// GET DATA
 // =========================
 export function getEventProtocols(event) {
   const filePath = getFilePath(event);
   return readFile(filePath);
 }
-
-
-// =========================
-// ADD THIS TO server.js
-// =========================
-
-// import { archiveEvent, getEventProtocols } from "./services/protocolStore.js";
-
-// =========================
-// ARCHIVE ENDPOINT
-// =========================
-
-// app.post("/admin/archive-event", (req, res) => {
-//   try {
-//     const { event } = req.body;
-//     const result = archiveEvent(event);
-//     res.json(result);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// =========================
-// FETCH EVENT DATA (DEBUG)
-// =========================
-
-// app.get("/admin/event/:event", (req, res) => {
-//   try {
-//     const data = getEventProtocols(req.params.event);
-//     res.json(data || { records: [] });
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-
-// =========================
-// RESULT
-// =========================
-// ✔ Storage split by event
-// ✔ Safe file handling
-// ✔ Archive support
-// ✔ Update-safe (protocolId)
-// ✔ Ready for DB migration later

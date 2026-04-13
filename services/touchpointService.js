@@ -7,10 +7,10 @@ const HUBSPOT_BASE = "https://api.hubapi.com";
 const TOKEN = process.env.Private_App_Token;
 
 const TOUCHPOINT_OBJECT = "2-133310485";
-const CONTACT_OBJECT = "0-3";
+const CONTACT_OBJECT = "0-1";
 
 // ✅ your custom association
-const ASSOCIATION_TYPE_ID = 25;
+const ASSOCIATION_TYPE_ID = 23;
 
 // =========================
 // CREATE TOUCHPOINT (NO ASSOCIATION HERE)

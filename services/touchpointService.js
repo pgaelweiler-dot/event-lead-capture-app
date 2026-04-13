@@ -1,5 +1,5 @@
 // =========================
-// touchpointService.js (FINAL HARDENED)
+// touchpointService.js (FINAL FIXED)
 // =========================
 import fetch from "node-fetch";
 
@@ -7,31 +7,22 @@ const HUBSPOT_BASE = "https://api.hubapi.com";
 const TOKEN = process.env.Private_App_Token;
 
 const TOUCHPOINT_OBJECT = "2-133310485";
+const CONTACT_OBJECT = "0-3";
+
+// ✅ your custom association
+const ASSOCIATION_TYPE_ID = 25;
 
 // =========================
-// CREATE TOUCHPOINT
+// CREATE TOUCHPOINT (NO ASSOCIATION HERE)
 // =========================
-async function createTouchpoint(properties, contactId) {
+async function createTouchpoint(properties) {
   const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${TOUCHPOINT_OBJECT}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${TOKEN}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      properties,
-      associations: [
-        {
-          to: { id: contactId },
-          types: [
-            {
-              associationCategory: "HUBSPOT_DEFINED",
-              associationTypeId: 3
-            }
-          ]
-        }
-      ]
-    })
+    body: JSON.stringify({ properties })
   });
 
   const data = await res.json();
@@ -42,8 +33,45 @@ async function createTouchpoint(properties, contactId) {
   }
 
   console.log("🟢 Created touchpoint:", data.id);
-
   return data.id;
+}
+
+// =========================
+// ASSOCIATE CONTACT → TOUCHPOINT
+// =========================
+async function associateContactToTouchpoint(contactId, touchpointId) {
+  const res = await fetch(
+    `${HUBSPOT_BASE}/crm/v4/associations/${CONTACT_OBJECT}/${TOUCHPOINT_OBJECT}/batch/create`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        inputs: [
+          {
+            from: { id: contactId },
+            to: { id: touchpointId },
+            types: [
+              {
+                associationCategory: "USER_DEFINED",
+                associationTypeId: ASSOCIATION_TYPE_ID
+              }
+            ]
+          }
+        ]
+      })
+    }
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    console.error("❌ Association failed:", err);
+    throw new Error("Association failed");
+  }
+
+  console.log("🔗 Associated contact → touchpoint");
 }
 
 // =========================
@@ -66,66 +94,7 @@ async function updateTouchpoint(id, properties) {
   }
 
   console.log("🔁 Updated touchpoint:", id);
-
   return id;
-}
-
-// =========================
-// SAFE FALLBACK RECOVERY
-// =========================
-async function findRecentTouchpoint(contactId, eventName) {
-  const FIVE_DAYS = 5 * 24 * 60 * 60 * 1000;
-  const cutoff = new Date(Date.now() - FIVE_DAYS).toISOString();
-
-  console.warn("⚠️ Attempting touchpoint recovery...");
-  console.log("🔎 Searching:", eventName, "since", cutoff);
-
-  const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${TOUCHPOINT_OBJECT}/search`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      filterGroups: [
-        {
-          filters: [
-            {
-              propertyName: "n4f_touchpoint_name_dd",
-              operator: "EQ",
-              value: eventName
-            },
-            {
-              propertyName: "createdate",
-              operator: "GTE",
-              value: cutoff
-            }
-          ]
-        }
-      ],
-      limit: 10
-    })
-  });
-
-  const data = await res.json();
-
-  if (!data.results) {
-    console.error("❌ Recovery search failed:", data);
-    return null;
-  }
-
-  for (const tp of data.results) {
-    const assoc = tp.associations?.contacts?.results || [];
-
-    if (assoc.some(c => c.id === contactId)) {
-      console.log("🔁 Recovered touchpoint:", tp.id);
-      return tp.id;
-    }
-  }
-
-  console.warn("⚠️ No matching recent touchpoint found");
-
-  return null;
 }
 
 // =========================
@@ -134,35 +103,19 @@ async function findRecentTouchpoint(contactId, eventName) {
 export async function createOrUpdateTouchpoint(mappedProperties, contactId, payload) {
 
   let touchpointId = payload?.hubspot?.touchpointId;
-  const eventName = mappedProperties.n4f_touchpoint_name_dd;
 
-  if (!eventName) {
-    throw new Error("Missing event_name → cannot process touchpoint");
-  }
-
-  // =========================
-  // 1. PRIMARY: USE ID
-  // =========================
+  // UPDATE
   if (touchpointId) {
     console.log("➡️ Using existing touchpointId:", touchpointId);
     return await updateTouchpoint(touchpointId, mappedProperties);
   }
 
-  // =========================
-  // 2. FALLBACK: ONLY IF UPDATE
-  // =========================
-  if (payload?.needsUpdate) {
-    const recovered = await findRecentTouchpoint(contactId, eventName);
+  // CREATE + ASSOCIATE
+  console.log("➕ Creating new touchpoint (no ID)");
 
-    if (recovered) {
-      return await updateTouchpoint(recovered, mappedProperties);
-    }
-  }
+  const newId = await createTouchpoint(mappedProperties);
 
-  // =========================
-  // 3. DEFAULT: CREATE
-  // =========================
-  console.log("➕ Creating new touchpoint (no ID / no recovery)");
+  await associateContactToTouchpoint(contactId, newId);
 
-  return await createTouchpoint(mappedProperties, contactId);
+  return newId;
 }

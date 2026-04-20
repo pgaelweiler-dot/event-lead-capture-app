@@ -1,12 +1,12 @@
 // =========================
-// contactService.js (FINAL)
+// contactService.js (FULLY FIXED)
 // =========================
+
 import fetch from "node-fetch";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const TOKEN = process.env.Private_App_Token;
 
-// language mapping
 const LANGUAGE_MAP = {
   DE: "DE",
   EN: "EN",
@@ -25,26 +25,18 @@ export async function upsertContact(payload) {
   if (payload.extracted?.company) properties.company = payload.extracted.company;
   if (payload.extracted?.jobTitle) properties.jobtitle = payload.extracted.jobTitle;
 
-  // ✅ LANGUAGE MAPPING
-  if (payload.extracted?.preferredLanguage) {
-    const lang = payload.extracted.preferredLanguage.toUpperCase();
+  if (payload.extracted?.language) {
+    const lang = payload.extracted.language.toUpperCase();
     if (LANGUAGE_MAP[lang]) {
       properties.pd_language = LANGUAGE_MAP[lang];
     }
   }
 
-  properties.n4f_contact_source_level_1 = "Marketing event";
-  properties.n4f_contact_source_level_3 = "Booth Contacts";
-
-  if (payload.meta?.event) {
-    properties.n4f_lead_source_level_2_dd = payload.meta.event;
-  }
+  // ALWAYS
+  properties.n4f_conversion_url = "Leadscannerapp_Patrick";
 
   let contactId = payload.hubspot?.contactId;
 
-  // =========================
-  // EMAIL DEDUP
-  // =========================
   if (!contactId && properties.email) {
     const searchRes = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/search`, {
       method: "POST",
@@ -68,13 +60,9 @@ export async function upsertContact(payload) {
 
     if (data.results?.length > 0) {
       contactId = data.results[0].id;
-      console.log("🔁 Found existing contact:", contactId);
     }
   }
 
-  // =========================
-  // UPDATE
-  // =========================
   if (contactId) {
     await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/${contactId}`, {
       method: "PATCH",
@@ -88,21 +76,22 @@ export async function upsertContact(payload) {
     return contactId;
   }
 
-  // =========================
-  // CREATE
-  // =========================
+  const createProperties = {
+    ...properties,
+    n4f_contact_source_level_1: "Marketing event",
+    n4f_contact_source_level_3: "Booth Contacts"
+  };
+
   const resCreate = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${TOKEN}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ properties })
+    body: JSON.stringify({ properties: createProperties })
   });
 
   const createData = await resCreate.json();
-
-  console.log("🟢 Contact created:", createData.id);
 
   return createData.id;
 }

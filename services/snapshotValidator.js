@@ -12,6 +12,7 @@ export function validateContacts(contacts) {
     title: c.title || "",
     phone: c.phone || "",
     pd_language: normalizeLanguage(c.pd_language),
+    emailBounceKnown: Boolean(c.emailBounceKnown),
     lastModified: c.lastModified || null
   }));
 }

@@ -163,6 +163,7 @@ function mapContact(c) {
     title: c.properties.jobtitle || "",
     phone: c.properties.phone || "",
     pd_language: c.properties.pd_language || null,
+    emailBounceKnown: !!bounceReason,
     lastModified: c.properties.hs_lastmodifieddate || null
   };
 }
@@ -194,7 +195,7 @@ export async function buildSnapshot() {
     contactIds,
     [
       "firstname","lastname","email","company","jobtitle",
-      "phone","pd_language","hs_lastmodifieddate"
+      "phone","pd_language","hs_lastmodifieddate","hs_email_hard_bounce_reason_enum"
     ],
     mapContact,
     CONTACTS_PATH

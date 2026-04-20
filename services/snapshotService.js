@@ -89,6 +89,11 @@ async function fetchListMembersResumable(listIds, type) {
 
       const data = await res.json();
 
+      if (object === "contacts" && i === 0) {
+  console.log("🔍 RAW HUBSPOT CONTACT SAMPLE:");
+  console.log(JSON.stringify(data.results?.[0]?.properties, null, 2));
+}
+
       const newIds = data.results?.map(r => r.recordId) || [];
       allIds.push(...newIds);
 
@@ -154,6 +159,23 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
 // MAPPING
 // =========================
 function mapContact(c) {
+  // 🔍 DEBUG (temporary)
+  if (!c.properties.hasOwnProperty("hs_email_hard_bounce_reason_enum")) {
+    console.warn("⚠️ Bounce field missing on contact:", c.id);
+  }
+
+  const bounceReason =
+    c?.properties?.hs_email_hard_bounce_reason_enum || null;
+
+  // 🔍 DEBUG (only when present)
+  if (bounceReason) {
+    console.log("📧 Bounce detected:", {
+      id: c.id,
+      email: c.properties.email,
+      reason: bounceReason
+    });
+  }
+
   return {
     id: c.id,
     first: c.properties.firstname || "",
@@ -163,7 +185,10 @@ function mapContact(c) {
     title: c.properties.jobtitle || "",
     phone: c.properties.phone || "",
     pd_language: c.properties.pd_language || null,
+
+    // ✅ FIXED: now defined correctly
     emailBounceKnown: !!bounceReason,
+
     lastModified: c.properties.hs_lastmodifieddate || null
   };
 }

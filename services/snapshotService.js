@@ -1,5 +1,5 @@
 // =========================
-// snapshotService.js (FINAL PRODUCTION)
+// snapshotService.js (FULLY UPDATED)
 // =========================
 import fs from "fs";
 import fetch from "node-fetch";
@@ -59,7 +59,7 @@ function clearProgress() {
 }
 
 // =========================
-// FETCH LIST MEMBERS (RESUMABLE)
+// FETCH LIST MEMBERS
 // =========================
 async function fetchListMembersResumable(listIds, type) {
   let progress = loadProgress();
@@ -69,7 +69,6 @@ async function fetchListMembersResumable(listIds, type) {
   let after = null;
 
   if (progress && progress.type === type) {
-    console.log("♻️ Resuming", type);
     startListIndex = progress.listIndex;
     after = progress.after;
     allIds = progress.collectedIds || [];
@@ -88,11 +87,6 @@ async function fetchListMembersResumable(listIds, type) {
       });
 
       const data = await res.json();
-
-      if (object === "contacts" && i === 0) {
-  console.log("🔍 RAW HUBSPOT CONTACT SAMPLE:");
-  console.log(JSON.stringify(data.results?.[0]?.properties, null, 2));
-}
 
       const newIds = data.results?.map(r => r.recordId) || [];
       allIds.push(...newIds);
@@ -125,8 +119,6 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
   for (let i = 0; i < ids.length; i += 100) {
     const chunk = ids.slice(i, i + 100);
 
-    console.log(`📦 ${object} chunk ${i} → ${i + chunk.length}`);
-
     const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${object}/batch/read`, {
       method: "POST",
       headers: {
@@ -140,9 +132,15 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
     });
 
     const data = await res.json();
+
+    // 🔍 DEBUG RAW RESPONSE (first chunk only)
+    if (object === "contacts" && i === 0) {
+      console.log("🔍 RAW HUBSPOT CONTACT SAMPLE:");
+      console.log(JSON.stringify(data.results?.[0]?.properties, null, 2));
+    }
+
     results.push(...(data.results || []));
 
-    // partial write
     const mapped = results.map(mapFn);
 
     if (object === "contacts") {
@@ -159,15 +157,12 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
 // MAPPING
 // =========================
 function mapContact(c) {
-  // 🔍 DEBUG (temporary)
+  const bounceReason = c?.properties?.hs_email_hard_bounce_reason_enum || null;
+
   if (!c.properties.hasOwnProperty("hs_email_hard_bounce_reason_enum")) {
     console.warn("⚠️ Bounce field missing on contact:", c.id);
   }
 
-  const bounceReason =
-    c?.properties?.hs_email_hard_bounce_reason_enum || null;
-
-  // 🔍 DEBUG (only when present)
   if (bounceReason) {
     console.log("📧 Bounce detected:", {
       id: c.id,
@@ -186,7 +181,6 @@ function mapContact(c) {
     phone: c.properties.phone || "",
     pd_language: c.properties.pd_language || null,
 
-    // ✅ FIXED: now defined correctly
     emailBounceKnown: !!bounceReason,
 
     lastModified: c.properties.hs_lastmodifieddate || null
@@ -210,8 +204,6 @@ function mapCompany(c) {
 // FULL BUILD
 // =========================
 export async function buildSnapshot() {
-  console.log("🔄 FULL SNAPSHOT BUILD");
-
   const contactIds = await fetchListMembersResumable(CONTACT_LIST_IDS, "contacts");
   const companyIds = await fetchListMembersResumable(COMPANY_LIST_IDS, "companies");
 
@@ -220,7 +212,8 @@ export async function buildSnapshot() {
     contactIds,
     [
       "firstname","lastname","email","company","jobtitle",
-      "phone","pd_language","hs_lastmodifieddate","hs_email_hard_bounce_reason_enum"
+      "phone","pd_language","hs_lastmodifieddate",
+      "hs_email_hard_bounce_reason_enum"
     ],
     mapContact,
     CONTACTS_PATH
@@ -257,11 +250,9 @@ export async function buildSnapshot() {
 }
 
 // =========================
-// UPDATE (SMART MERGE)
+// UPDATE SNAPSHOT
 // =========================
 export async function updateSnapshot() {
-  console.log("🔄 INCREMENTAL UPDATE");
-
   const version = readJsonSafe(VERSION_PATH);
   if (!version?.lastSync) {
     return await buildSnapshot();
@@ -281,7 +272,8 @@ export async function updateSnapshot() {
     contactIds,
     [
       "firstname","lastname","email","company","jobtitle",
-      "phone","pd_language","hs_lastmodifieddate"
+      "phone","pd_language","hs_lastmodifieddate",
+      "hs_email_hard_bounce_reason_enum"
     ],
     mapContact,
     CONTACTS_PATH

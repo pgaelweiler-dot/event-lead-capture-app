@@ -1,5 +1,5 @@
 // =========================
-// snapshotService.js (FULLY UPDATED)
+// snapshotService.js (UPDATED LOGGING ONLY)
 // =========================
 import fs from "fs";
 import fetch from "node-fetch";
@@ -19,6 +19,11 @@ const CONTACTS_PATH = "./data/snapshots/contacts.json";
 const COMPANIES_PATH = "./data/snapshots/companies.json";
 const VERSION_PATH = "./data/snapshots/version.json";
 const PROGRESS_PATH = "./data/snapshots/buildprogress.json";
+
+// =========================
+// LOGGING STATE
+// =========================
+let bounceCount = 0;
 
 // =========================
 // FILE HELPERS
@@ -77,6 +82,8 @@ async function fetchListMembersResumable(listIds, type) {
   for (let i = startListIndex; i < listIds.length; i++) {
     const listId = listIds[i];
 
+    console.log(`📥 Fetching ${type} list ${i + 1}/${listIds.length} (ID: ${listId})`);
+
     do {
       const url = new URL(`${HUBSPOT_BASE}/crm/v3/lists/${listId}/memberships`);
       url.searchParams.append("limit", "100");
@@ -90,6 +97,8 @@ async function fetchListMembersResumable(listIds, type) {
 
       const newIds = data.results?.map(r => r.recordId) || [];
       allIds.push(...newIds);
+
+      console.log(`📊 ${type} IDs collected: ${allIds.length}`);
 
       after = data.paging?.next?.after || null;
 
@@ -119,6 +128,8 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
   for (let i = 0; i < ids.length; i += 100) {
     const chunk = ids.slice(i, i + 100);
 
+    console.log(`📦 ${object} chunk: ${i} → ${i + chunk.length}`);
+
     const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/${object}/batch/read`, {
       method: "POST",
       headers: {
@@ -133,7 +144,6 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
 
     const data = await res.json();
 
-    // 🔍 DEBUG RAW RESPONSE (first chunk only)
     if (object === "contacts" && i === 0) {
       console.log("🔍 RAW HUBSPOT CONTACT SAMPLE:");
       console.log(JSON.stringify(data.results?.[0]?.properties, null, 2));
@@ -141,6 +151,9 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
 
     results.push(...(data.results || []));
 
+    console.log(`📊 ${object} total processed: ${results.length}`);
+
+    // KEEP incremental write (your design choice)
     const mapped = results.map(mapFn);
 
     if (object === "contacts") {
@@ -163,12 +176,9 @@ function mapContact(c) {
     console.warn("⚠️ Bounce field missing on contact:", c.id);
   }
 
+  // ✅ Count instead of spam logging
   if (bounceReason) {
-    console.log("📧 Bounce detected:", {
-      id: c.id,
-      email: c.properties.email,
-      reason: bounceReason
-    });
+    bounceCount++;
   }
 
   return {
@@ -204,6 +214,11 @@ function mapCompany(c) {
 // FULL BUILD
 // =========================
 export async function buildSnapshot() {
+
+  bounceCount = 0; // reset
+
+  console.log("🚀 Starting snapshot build...");
+
   const contactIds = await fetchListMembersResumable(CONTACT_LIST_IDS, "contacts");
   const companyIds = await fetchListMembersResumable(COMPANY_LIST_IDS, "companies");
 
@@ -242,6 +257,12 @@ export async function buildSnapshot() {
     lastSync: now
   });
 
+  console.log("✅ SNAPSHOT COMPLETE:", {
+    contacts: contacts.length,
+    companies: companies.length,
+    bounces: bounceCount
+  });
+
   return {
     contacts: contacts.length,
     companies: companies.length,
@@ -250,13 +271,18 @@ export async function buildSnapshot() {
 }
 
 // =========================
-// UPDATE SNAPSHOT
+// UPDATE SNAPSHOT (same logging applied)
 // =========================
 export async function updateSnapshot() {
+
+  bounceCount = 0;
+
   const version = readJsonSafe(VERSION_PATH);
   if (!version?.lastSync) {
     return await buildSnapshot();
   }
+
+  console.log("🔄 Updating snapshot...");
 
   const existingContacts = readJsonSafe(CONTACTS_PATH) || [];
   const existingCompanies = readJsonSafe(COMPANIES_PATH) || [];
@@ -305,23 +331,15 @@ export async function updateSnapshot() {
     lastSync: now
   });
 
+  console.log("✅ SNAPSHOT UPDATE COMPLETE:", {
+    contacts: contactMap.size,
+    companies: companyMap.size,
+    bounces: bounceCount
+  });
+
   return {
     contacts: contactMap.size,
     companies: companyMap.size
   };
 }
 
-// =========================
-// GETTERS
-// =========================
-export function getContactsSnapshot() {
-  return readJsonSafe(CONTACTS_PATH) || [];
-}
-
-export function getCompaniesSnapshot() {
-  return readJsonSafe(COMPANIES_PATH) || [];
-}
-
-export function getSnapshotVersion() {
-  return readJsonSafe(VERSION_PATH)?.version || null;
-}

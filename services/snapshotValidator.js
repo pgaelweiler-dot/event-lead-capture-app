@@ -11,7 +11,7 @@ export function validateContacts(contacts) {
     company: c.company || "",
     title: c.title || "",
     phone: c.phone || "",
-    pd_language: normalizeLanguage(c.pd_language),
+    language: normalizeLanguage(c.pd_language),
     emailBounceKnown: Boolean(c.emailBounceKnown),
     lastModified: c.lastModified || null
   }));

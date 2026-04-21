@@ -1,6 +1,7 @@
 // =========================
-// snapshotService.js (UPDATED LOGGING ONLY)
+// snapshotService.js (FULL - FIXED EXPORTS + CLEAN LOGGING)
 // =========================
+
 import fs from "fs";
 import fetch from "node-fetch";
 
@@ -12,8 +13,13 @@ import {
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const TOKEN = process.env.Private_App_Token;
 
-const CONTACT_LIST_IDS = (process.env.HUBSPOT_CONTACT_LIST_IDS || "").split(",").filter(Boolean);
-const COMPANY_LIST_IDS = (process.env.HUBSPOT_COMPANY_LIST_IDS || "").split(",").filter(Boolean);
+const CONTACT_LIST_IDS = (process.env.HUBSPOT_CONTACT_LIST_IDS || "")
+  .split(",")
+  .filter(Boolean);
+
+const COMPANY_LIST_IDS = (process.env.HUBSPOT_COMPANY_LIST_IDS || "")
+  .split(",")
+  .filter(Boolean);
 
 const CONTACTS_PATH = "./data/snapshots/contacts.json";
 const COMPANIES_PATH = "./data/snapshots/companies.json";
@@ -43,6 +49,33 @@ function writeJsonAtomic(path, data) {
 }
 
 // =========================
+// SNAPSHOT READ HELPERS (FIXED EXPORTS)
+// =========================
+export async function getContactsSnapshot() {
+  try {
+    return JSON.parse(fs.readFileSync(CONTACTS_PATH, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+export async function getCompaniesSnapshot() {
+  try {
+    return JSON.parse(fs.readFileSync(COMPANIES_PATH, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+export async function getSnapshotVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(VERSION_PATH, "utf-8"));
+  } catch {
+    return { version: null, lastSync: null };
+  }
+}
+
+// =========================
 // PROGRESS HANDLING
 // =========================
 function saveProgress(data) {
@@ -64,7 +97,7 @@ function clearProgress() {
 }
 
 // =========================
-// FETCH LIST MEMBERS
+// FETCH LIST MEMBERS (RESUMABLE)
 // =========================
 async function fetchListMembersResumable(listIds, type) {
   let progress = loadProgress();
@@ -153,7 +186,7 @@ async function batchReadChunked(object, ids, properties, mapFn, path) {
 
     console.log(`📊 ${object} total processed: ${results.length}`);
 
-    // KEEP incremental write (your design choice)
+    // incremental write (your design)
     const mapped = results.map(mapFn);
 
     if (object === "contacts") {
@@ -176,7 +209,6 @@ function mapContact(c) {
     console.warn("⚠️ Bounce field missing on contact:", c.id);
   }
 
-  // ✅ Count instead of spam logging
   if (bounceReason) {
     bounceCount++;
   }
@@ -190,9 +222,7 @@ function mapContact(c) {
     title: c.properties.jobtitle || "",
     phone: c.properties.phone || "",
     pd_language: c.properties.pd_language || null,
-
     emailBounceKnown: !!bounceReason,
-
     lastModified: c.properties.hs_lastmodifieddate || null
   };
 }
@@ -215,7 +245,7 @@ function mapCompany(c) {
 // =========================
 export async function buildSnapshot() {
 
-  bounceCount = 0; // reset
+  bounceCount = 0;
 
   console.log("🚀 Starting snapshot build...");
 
@@ -271,7 +301,7 @@ export async function buildSnapshot() {
 }
 
 // =========================
-// UPDATE SNAPSHOT (same logging applied)
+// UPDATE SNAPSHOT
 // =========================
 export async function updateSnapshot() {
 

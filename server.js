@@ -1,6 +1,7 @@
 // =========================
-// server.js (FINAL WITH EMAIL + RESOLUTION)
+// server.js (FINAL COMPLETE VERSION)
 // =========================
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -15,15 +16,12 @@ import { upsertContact } from "./services/contactService.js";
 
 import {
   buildSnapshot,
-  updateSnapshot,
   getContactsSnapshot,
   getCompaniesSnapshot,
   getSnapshotVersion
 } from "./services/snapshotService.js";
 
 import { startScheduler } from "./services/scheduler.js";
-
-// ✅ NEW
 import { sendNotification } from "./services/emailService.js";
 
 dotenv.config();
@@ -32,16 +30,33 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+
 // =========================
-// SNAPSHOT
+// SNAPSHOT (PROTECTED)
 // =========================
 app.get("/snapshot/full", async (req, res) => {
-  res.json({
-    version: await getSnapshotVersion(),
-    contacts: await getContactsSnapshot(),
-    companies: await getCompaniesSnapshot()
-  });
+  try {
+    const apiKey = req.headers["x-api-key"];
+
+    if (!apiKey || apiKey !== process.env.SNAPSHOT_API_KEY) {
+      console.warn("🚫 Unauthorized snapshot access attempt");
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    console.log("🔐 Authorized snapshot access");
+
+    res.json({
+      version: await getSnapshotVersion(),
+      contacts: await getContactsSnapshot(),
+      companies: await getCompaniesSnapshot()
+    });
+
+  } catch (err) {
+    console.error("❌ Snapshot error:", err);
+    res.status(500).json({ error: "Snapshot failed" });
+  }
 });
+
 
 // =========================
 // EXPORT
@@ -68,8 +83,9 @@ app.get("/admin/export/:event", (req, res) => {
   res.send(buffer);
 });
 
+
 // =========================
-// SYNC (UPDATED WITH EMAIL + RESOLUTION)
+// SYNC (CONTACT + TOUCHPOINT + EMAIL)
 // =========================
 app.post("/sync/lead", async (req, res) => {
   const payload = req.body;
@@ -80,9 +96,7 @@ app.post("/sync/lead", async (req, res) => {
   try {
     const protocol = validateProtocol(payload.protocol);
 
-    // =========================
-    // CONTACT
-    // =========================
+    // ================= CONTACT =================
     try {
       const contactResponse = await upsertContact(payload);
 
@@ -104,9 +118,7 @@ app.post("/sync/lead", async (req, res) => {
 
       const mapped = mapProtocolToHubSpot(protocol);
 
-      // =========================
-      // TOUCHPOINT
-      // =========================
+      // ================= TOUCHPOINT =================
       try {
         const touchpointId = await createOrUpdateTouchpoint(
           mapped,
@@ -124,24 +136,7 @@ app.post("/sync/lead", async (req, res) => {
           status: "synced"
         });
 
-        // =========================
-        // RESOLUTION
-        // =========================
-        const contactResolution =
-          payload.hubspot?.contactId
-            ? "Updated via ID"
-            : matchedByEmail
-            ? "Matched by Email"
-            : "New Contact";
-
-        const touchpointResolution =
-          payload.hubspot?.touchpointId
-            ? "Updated"
-            : "Created";
-
-        // =========================
-        // EMAIL SUCCESS
-        // =========================
+        // ================= EMAIL SUCCESS =================
         await sendNotification({
           subject: "✅ Lead Sync Success",
           text: `
@@ -151,8 +146,18 @@ Contact ID: ${contactId}
 Touchpoint ID: ${touchpointId}
 
 Resolution:
-- Contact: ${contactResolution}
-- Touchpoint: ${touchpointResolution}
+- Contact: ${
+            payload.hubspot?.contactId
+              ? "Updated via ID"
+              : matchedByEmail
+              ? "Matched by Email"
+              : "New Contact"
+          }
+- Touchpoint: ${
+            payload.hubspot?.touchpointId
+              ? "Updated"
+              : "Created"
+          }
 
 Event: ${payload.eventId || "n/a"}
 
@@ -177,27 +182,13 @@ ${JSON.stringify(payload, null, 2)}
           status: "partial"
         });
 
-        // =========================
-        // EMAIL PARTIAL FAILURE
-        // =========================
         await sendNotification({
           subject: "⚠️ Touchpoint Sync Failed",
           text: `
 Contact Email: ${payload.extracted?.email}
-
 Contact ID: ${contactId}
 
 Error: ${tpErr.message}
-
-Resolution:
-- Contact: ${
-            payload.hubspot?.contactId
-              ? "Updated via ID"
-              : matchedByEmail
-              ? "Matched by Email"
-              : "New Contact"
-          }
-- Touchpoint: FAILED
 
 Payload:
 ${JSON.stringify(payload, null, 2)}
@@ -252,13 +243,27 @@ ${JSON.stringify(payload, null, 2)}
   }
 });
 
+
 // =========================
-// START
+// START SERVER + SNAPSHOT FRONTLOAD
 // =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log("🚀 Server running on", PORT);
+
+  // =========================
+  // FRONTLOAD SNAPSHOT (NON-BLOCKING)
+  // =========================
+  console.log("📦 Starting initial snapshot build...");
+
+  buildSnapshot()
+    .then(() => console.log("✅ Initial snapshot ready"))
+    .catch(err => console.error("❌ Initial snapshot failed:", err));
+
+  // =========================
+  // START SCHEDULER
+  // =========================
   startScheduler();
 });
 

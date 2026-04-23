@@ -1,5 +1,5 @@
 // =========================
-// contactService.js (FULLY FIXED)
+// contactService.js (UPDATED SAFE VERSION)
 // =========================
 
 import fetch from "node-fetch";
@@ -32,11 +32,14 @@ export async function upsertContact(payload) {
     }
   }
 
-  // ALWAYS
   properties.n4f_conversion_url = "Leadscannerapp_Patrick";
 
   let contactId = payload.hubspot?.contactId;
+  let matchedByEmail = false;
 
+  // =========================
+  // EMAIL MATCH (UNCHANGED BEHAVIOR)
+  // =========================
   if (!contactId && properties.email) {
     const searchRes = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/search`, {
       method: "POST",
@@ -60,9 +63,13 @@ export async function upsertContact(payload) {
 
     if (data.results?.length > 0) {
       contactId = data.results[0].id;
+      matchedByEmail = true;
     }
   }
 
+  // =========================
+  // UPDATE
+  // =========================
   if (contactId) {
     await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/${contactId}`, {
       method: "PATCH",
@@ -73,9 +80,16 @@ export async function upsertContact(payload) {
       body: JSON.stringify({ properties })
     });
 
-    return contactId;
+    return {
+      id: contactId,
+      matchedByEmail,
+      created: false
+    };
   }
 
+  // =========================
+  // CREATE
+  // =========================
   const createProperties = {
     ...properties,
     n4f_contact_source_level_1: "Marketing event",
@@ -93,5 +107,9 @@ export async function upsertContact(payload) {
 
   const createData = await resCreate.json();
 
-  return createData.id;
+  return {
+    id: createData.id,
+    matchedByEmail: false,
+    created: true
+  };
 }

@@ -1,5 +1,5 @@
 // =========================
-// server.js (FINAL FIXED SYNC)
+// server.js (FINAL WITH EMAIL + RESOLUTION)
 // =========================
 import express from "express";
 import cors from "cors";
@@ -22,6 +22,9 @@ import {
 } from "./services/snapshotService.js";
 
 import { startScheduler } from "./services/scheduler.js";
+
+// ✅ NEW
+import { sendNotification } from "./services/emailService.js";
 
 dotenv.config();
 
@@ -66,7 +69,7 @@ app.get("/admin/export/:event", (req, res) => {
 });
 
 // =========================
-// SYNC (FIXED)
+// SYNC (UPDATED WITH EMAIL + RESOLUTION)
 // =========================
 app.post("/sync/lead", async (req, res) => {
   const payload = req.body;
@@ -77,14 +80,33 @@ app.post("/sync/lead", async (req, res) => {
   try {
     const protocol = validateProtocol(payload.protocol);
 
+    // =========================
     // CONTACT
+    // =========================
     try {
-      const contactId = await upsertContact(payload);
-      contactResult = { success: true, id: contactId };
+      const contactResponse = await upsertContact(payload);
+
+      const contactId =
+        typeof contactResponse === "object"
+          ? contactResponse.id
+          : contactResponse;
+
+      const matchedByEmail =
+        typeof contactResponse === "object"
+          ? contactResponse.matchedByEmail
+          : false;
+
+      contactResult = {
+        success: true,
+        id: contactId,
+        matchedByEmail
+      };
 
       const mapped = mapProtocolToHubSpot(protocol);
 
+      // =========================
       // TOUCHPOINT
+      // =========================
       try {
         const touchpointId = await createOrUpdateTouchpoint(
           mapped,
@@ -102,6 +124,43 @@ app.post("/sync/lead", async (req, res) => {
           status: "synced"
         });
 
+        // =========================
+        // RESOLUTION
+        // =========================
+        const contactResolution =
+          payload.hubspot?.contactId
+            ? "Updated via ID"
+            : matchedByEmail
+            ? "Matched by Email"
+            : "New Contact";
+
+        const touchpointResolution =
+          payload.hubspot?.touchpointId
+            ? "Updated"
+            : "Created";
+
+        // =========================
+        // EMAIL SUCCESS
+        // =========================
+        await sendNotification({
+          subject: "✅ Lead Sync Success",
+          text: `
+Contact Email: ${payload.extracted?.email}
+
+Contact ID: ${contactId}
+Touchpoint ID: ${touchpointId}
+
+Resolution:
+- Contact: ${contactResolution}
+- Touchpoint: ${touchpointResolution}
+
+Event: ${payload.eventId || "n/a"}
+
+Payload:
+${JSON.stringify(payload, null, 2)}
+`
+        });
+
       } catch (tpErr) {
         console.error("❌ Touchpoint failed", tpErr);
 
@@ -117,10 +176,49 @@ app.post("/sync/lead", async (req, res) => {
           payload,
           status: "partial"
         });
+
+        // =========================
+        // EMAIL PARTIAL FAILURE
+        // =========================
+        await sendNotification({
+          subject: "⚠️ Touchpoint Sync Failed",
+          text: `
+Contact Email: ${payload.extracted?.email}
+
+Contact ID: ${contactId}
+
+Error: ${tpErr.message}
+
+Resolution:
+- Contact: ${
+            payload.hubspot?.contactId
+              ? "Updated via ID"
+              : matchedByEmail
+              ? "Matched by Email"
+              : "New Contact"
+          }
+- Touchpoint: FAILED
+
+Payload:
+${JSON.stringify(payload, null, 2)}
+`
+        });
       }
 
     } catch (contactErr) {
       console.error("❌ Contact failed", contactErr);
+
+      await sendNotification({
+        subject: "❌ Contact Sync Failed",
+        text: `
+Error: ${contactErr.message}
+
+Contact Email: ${payload.extracted?.email}
+
+Payload:
+${JSON.stringify(payload, null, 2)}
+`
+      });
 
       return res.status(500).json({
         contact: { success: false, error: contactErr.message },
@@ -135,6 +233,16 @@ app.post("/sync/lead", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Sync failed", err);
+
+    await sendNotification({
+      subject: "❌ Lead Sync Failure",
+      text: `
+Error: ${err.message}
+
+Payload:
+${JSON.stringify(payload, null, 2)}
+`
+    });
 
     res.status(500).json({
       contact: { success: false },
@@ -153,3 +261,4 @@ app.listen(PORT, () => {
   console.log("Server running on", PORT);
   startScheduler();
 });
+
